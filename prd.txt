@@ -1,0 +1,103 @@
+**Project Requirements Document (PRD) for AI Training Pipeline**
+
+---
+
+## 1. **Project Overview**
+### **Objective**
+The goal of this project is to develop a **Training Service** that allows users to initiate, monitor, and manage AI model training on a **single workstation with four NVIDIA RTX 3090 GPUs**. The system should support multiple users, ensuring that GPU resources are efficiently allocated and training jobs are queued when necessary.
+
+---
+
+## 2. **Technology Stack**
+- **Backend API:** FastAPI (with async calls for performance optimization)
+- **Message Broker:** RabbitMQ (for job queueing and job distribution)
+- **Frontend UI:** Streamlit (for user interaction and job monitoring)
+- **Job Execution:** Python (with PyTorch/TensorFlow for AI model training)
+- **GPU Management:** NVIDIA CUDA, `nvidia-smi`
+- **Containerization:** Docker (optional, for isolation)
+- **Database:** PostgreSQL or SQLite (optional, for tracking jobs and results)
+
+---
+
+## 3. **System Components**
+
+### **1️⃣ Web Interface (Streamlit)**
+- Users can **submit training jobs**.
+- Displays **real-time monitoring** of running jobs (status, logs, GPU usage).
+- Provides **history** of completed jobs.
+
+### **2️⃣ API Backend (FastAPI)**
+- Accepts user training requests.
+- Assigns available GPUs (using async functions for non-blocking execution).
+- Publishes training jobs to RabbitMQ.
+- Retrieves training status updates.
+
+### **3️⃣ Job Queueing (RabbitMQ)**
+- Ensures that jobs are processed in order of submission.
+- Prevents resource over-utilization by enforcing GPU constraints.
+- Routes jobs to available training workers.
+- **Handles jobs when all GPUs are occupied by placing them in a queue** and processing them in FIFO order as soon as a GPU becomes available.
+- If a job is queued, the API returns a message informing the user about the estimated wait time.
+
+### **4️⃣ Training Worker (Python Process)**
+- Listens for incoming training jobs from RabbitMQ.
+- Checks for available GPUs before running jobs.
+- Runs the training process using `CUDA_VISIBLE_DEVICES`.
+- Sends status updates back to API.
+
+### **5️⃣ GPU Manager**
+- Uses `nvidia-smi` to monitor **GPU availability**.
+- Ensures that **no more than 4 jobs** run simultaneously.
+- Assigns GPUs dynamically to jobs.
+
+---
+
+## 4. **Implementation Steps**
+
+### **Phase 1: Initial Setup and Basic Infrastructure**
+- [ ] Set up a **FastAPI** project with a basic endpoint.
+- [ ] Install and configure **RabbitMQ**.
+- [ ] Implement a **basic job submission endpoint** in FastAPI.
+- [ ] Write a **RabbitMQ publisher** that sends training jobs to a queue.
+
+### **Phase 2: Job Execution and GPU Management**
+- [ ] Implement a **GPU monitoring function** (`get_free_gpus()`).
+- [ ] Develop a **RabbitMQ worker** that listens for jobs and starts training.
+- [ ] Enable **training execution with dynamic GPU allocation**.
+- [ ] Implement **status tracking** (e.g., job completed, in progress).
+- [ ] Implement **job queuing when all GPUs are occupied**.
+
+### **Phase 3: User Interface (Streamlit)**
+- [ ] Create a **Streamlit UI** for job submission.
+- [ ] Display **running jobs, GPU usage, and logs**.
+- [ ] Implement a **job history** feature.
+- [ ] Show **queue status and estimated wait times** when GPUs are fully occupied.
+
+### **Phase 4: Advanced Features & Enhancements**
+- [ ] **Logging & Monitoring** (Prometheus, TensorBoard integration).
+- [ ] **Database storage** for job tracking (PostgreSQL or SQLite).
+- [ ] **Support for multi-GPU training**.
+- [ ] **Job prioritization** (e.g., priority queues for urgent jobs).
+
+---
+
+## 5. **Expected Outcomes**
+- A fully functional **training job management system**.
+- Optimized **GPU usage with job queueing and scheduling**.
+- **Scalability** for future extensions (e.g., multiple workstations, cloud integration).
+- A **user-friendly UI** for seamless training execution and monitoring.
+
+---
+
+## 6. **Next Steps**
+- Define **initial test cases** for API and training execution.
+- Assign **developer tasks** for Phase 1 implementation.
+- Conduct **a first prototype test with real training jobs**.
+
+---
+
+### **Notes**
+- All API calls should be **async** to avoid blocking execution.
+- RabbitMQ should **handle failures gracefully** (e.g., job retries, dead-letter queues).
+- UI should support **real-time job tracking** (WebSockets or polling).
+
