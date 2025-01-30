@@ -1,0 +1,15 @@
+ai_training_pipeline/
+├── streamlit_app.py      # Moved to root
+├── app/
+│   ├── __init__.py
+│   ├── main.py           # FastAPI application
+│   ├── config.py         # Configuration settings
+│   ├── utils/
+│   │   └── logger.py
+│   └── rabbitmq/
+│       ├── __init__.py
+│       └── publisher.py   # RabbitMQ publisher
+├── logs/           # Add this directory
+│   └── .gitkeep
+├── requirements.txt
+└── README.md 
