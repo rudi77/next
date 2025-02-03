@@ -57,7 +57,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 3. Install dependencies:
 ```bash
 pip install -r requirements.txt
-```README.md
+```
 
 4. Install and start RabbitMQ:
 ```bash
@@ -68,7 +68,16 @@ sudo systemctl start rabbitmq-server
 # For macOS
 brew install rabbitmq
 brew services start rabbitmq
+
+# Using Docker (recommended for local development)
+docker run -d --name rabbitmq \
+    -p 5672:5672 -p 15672:15672 \
+    -e RABBITMQ_DEFAULT_USER=guest \
+    -e RABBITMQ_DEFAULT_PASS=guest \
+    rabbitmq:3-management
 ```
+
+If using Docker, you can manage RabbitMQ through the web interface at `http://localhost:15672` (login with guest/guest).
 
 ## Configuration
 
