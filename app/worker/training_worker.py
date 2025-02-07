@@ -9,6 +9,7 @@ from ..job.store import JobStore, JobStatus
 from ..utils.logger import setup_logger
 import subprocess
 from ..training.swift_config import SwiftTrainingConfig
+import traceback
 
 class TrainingWorker:
     def __init__(self):
@@ -18,22 +19,26 @@ class TrainingWorker:
         self.queue_name = "training_jobs"
         self.gpu_manager = GPUManager()
         self.job_store = JobStore()
+        self.running = True
 
     async def connect(self):
-        self.logger.info("Connecting to RabbitMQ")
-        try:
-            self.connection = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
-            self.channel = await self.connection.channel()
-            await self.channel.set_qos(prefetch_count=1)
-            
-            self.queue = await self.channel.declare_queue(
-                self.queue_name,
-                durable=True
-            )
-            self.logger.info("Successfully connected to RabbitMQ")
-        except Exception as e:
-            self.logger.error(f"Failed to connect to RabbitMQ: {str(e)}", exc_info=True)
-            raise
+        """Connect to RabbitMQ with retry logic"""
+        while self.running:
+            try:
+                self.logger.info("Connecting to RabbitMQ")
+                self.connection = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
+                self.channel = await self.connection.channel()
+                await self.channel.set_qos(prefetch_count=1)
+                
+                self.queue = await self.channel.declare_queue(
+                    self.queue_name,
+                    durable=True
+                )
+                self.logger.info("Successfully connected to RabbitMQ")
+                return
+            except Exception as e:
+                self.logger.error(f"Failed to connect to RabbitMQ: {str(e)}")
+                await asyncio.sleep(5)  # Wait before retrying
 
     async def process_training_job(self, gpu_indices: List[int], job_data: dict):
         job_id = job_data.get('job_id', 'unknown')
@@ -68,13 +73,18 @@ class TrainingWorker:
                 text=True
             )
             
-            # Stream output
+            # Stream output and error in parallel
             while True:
                 output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
+                error = process.stderr.readline()
+                
                 if output:
                     self.logger.info(output.strip())
+                if error:
+                    self.logger.error(error.strip())
+                    
+                if output == '' and error == '' and process.poll() is not None:
+                    break
             
             # Get return code
             return_code = process.poll()
@@ -83,52 +93,77 @@ class TrainingWorker:
             
             return {"status": "completed", "gpu_indices": gpu_indices}
         except Exception as e:
-            self.logger.error(f"Job {job_id}: Training failed: {str(e)}", exc_info=True)
+            self.logger.error(f"Job {job_id}: Training failed: {str(e)}\n{traceback.format_exc()}")
             raise
 
-    async def callback(self, message):
-        job_data = json.loads(message.body)
-        job_id = job_data.pop("job_id")
-        gpu_count = job_data.get('gpu_count', 1)
-        
-        # Try to allocate GPUs
-        gpu_indices = await self.gpu_manager.allocate_gpus(gpu_count)
-        
-        if gpu_indices:
+    async def handle_message(self, message: aio_pika.IncomingMessage):
+        """Handle a single message with proper error handling"""
+        try:
+            async with message.process():
+                job_data = json.loads(message.body)
+                job_id = job_data.pop("job_id", "unknown")
+                gpu_count = job_data.get('gpu_count', 1)
+                
+                # Try to allocate GPUs
+                gpu_indices = await self.gpu_manager.allocate_gpus(gpu_count)
+                
+                if gpu_indices:
+                    try:
+                        # Update status to running
+                        await self.job_store.update_job_status(
+                            job_id, 
+                            JobStatus.RUNNING, 
+                            gpu_indices
+                        )
+                        
+                        await self.process_training_job(gpu_indices, job_data)
+                        
+                        # Update status to completed
+                        await self.job_store.update_job_status(
+                            job_id, 
+                            JobStatus.COMPLETED
+                        )
+                    except Exception as e:
+                        # Update status to failed
+                        self.logger.error(f"Job {job_id} failed: {str(e)}\n{traceback.format_exc()}")
+                        await self.job_store.update_job_status(
+                            job_id, 
+                            JobStatus.FAILED
+                        )
+                        # Don't requeue failed jobs
+                else:
+                    # Keep status as queued and requeue message
+                    self.logger.info(f"No GPUs available for job {job_id}, requeueing")
+                    await message.nack(requeue=True)
+                    
+        except Exception as e:
+            self.logger.error(f"Error processing message: {str(e)}\n{traceback.format_exc()}")
+            # In case of processing error, nack without requeue to prevent infinite loop
             try:
-                # Update status to running
-                await self.job_store.update_job_status(
-                    job_id, 
-                    JobStatus.RUNNING, 
-                    gpu_indices
-                )
-                
-                result = await self.process_training_job(gpu_indices, job_data)
-                
-                # Update status to completed
-                await self.job_store.update_job_status(
-                    job_id, 
-                    JobStatus.COMPLETED
-                )
-                
-                await message.ack()
-            except Exception as e:
-                # Update status to failed
-                await self.job_store.update_job_status(
-                    job_id, 
-                    JobStatus.FAILED
-                )
-                await message.nack()
-                print(f"Training failed: {str(e)}")
-        else:
-            # Keep status as queued
-            await message.nack()
-            print("No GPUs available, requeueing job")
+                await message.nack(requeue=False)
+            except:
+                pass
 
     async def start(self):
-        await self.connect()
-        
-        async with self.queue.iterator() as queue_iter:
-            async for message in queue_iter:
-                async with message.process():
-                    await self.callback(message) 
+        """Main worker loop with error recovery"""
+        while self.running:
+            try:
+                if not self.connection or self.connection.is_closed:
+                    await self.connect()
+                
+                async with self.queue.iterator() as queue_iter:
+                    self.logger.info("Worker started and waiting for messages")
+                    async for message in queue_iter:
+                        await self.handle_message(message)
+                        
+            except Exception as e:
+                self.logger.error(f"Worker error: {str(e)}\n{traceback.format_exc()}")
+                # Wait before reconnecting
+                await asyncio.sleep(5)
+
+    async def stop(self):
+        """Graceful shutdown"""
+        self.logger.info("Shutting down worker...")
+        self.running = False
+        if self.connection:
+            await self.connection.close() 

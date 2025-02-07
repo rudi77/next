@@ -8,4 +8,5 @@ pydantic-settings==2.1.0
 aio-pika==9.3.0
 streamlit==1.28.0
 #requests==2.31.0
-ms-swift==3.0.3 
+ms-swift==3.0.3
+pywin32; platform_system=="Windows"  # For Windows signal handling 
