@@ -281,24 +281,81 @@ CUDA_VISIBLE_DEVICES=0 swift export \
     --output_dir Qwen2.5-7B-Instruct-AWQ
 ```
 
-## 🏛 License
+### Distributed Training
+#### 1. Distributed Training with Accelerate
 
-This framework is licensed under the [Apache License (Version 2.0)](https://github.com/modelscope/modelscope/blob/master/LICENSE). For models and datasets, please refer to the original resource page and follow the corresponding License.
+multi_node.yaml
 
-## 📎 Citation
-
-```bibtex
-@misc{zhao2024swiftascalablelightweightinfrastructure,
-      title={SWIFT:A Scalable lightWeight Infrastructure for Fine-Tuning},
-      author={Yuze Zhao and Jintao Huang and Jinghan Hu and Xingjun Wang and Yunlin Mao and Daoze Zhang and Zeyinzi Jiang and Zhikai Wu and Baole Ai and Ang Wang and Wenmeng Zhou and Yingda Chen},
-      year={2024},
-      eprint={2408.05517},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2408.05517},
-}
+```yaml
+compute_environment: LOCAL_MACHINE
+deepspeed_config:
+    deepspeed_multinode_launcher: standard
+    gradient_accumulation_steps: 16
+    offload_optimizer_device: none
+    offload_param_device: none
+    zero3_init_flag: false
+    zero_stage: 3
+distributed_type: DEEPSPEED
+main_process_ip: 'xxx.xxx.xxx.xxx'
+main_process_port: 29500
+main_training_function: main
+mixed_precision: bf16
+num_machines: 2
+num_processes: 8  # world size
+rdzv_backend: static
+use_cpu: false
 ```
 
-## Star History
+train_node1.sh
 
-[![Star History Chart](https://api.star-history.com/svg?repos=modelscope/swift&type=Date)](https://star-history.com/#modelscope/ms-swift&Date)
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+accelerate launch --config_file ./examples/train/multi-node/accelerate/multi_node.yaml --machine_rank 0 \
+    swift/cli/sft.py \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --train_type lora \
+    --torch_dtype bfloat16 \
+    --dataset 'swift/self-cognition#1000' \
+    --num_train_epochs 1 \
+    --lora_rank 8 \
+    --lora_alpha 32 \
+    --learning_rate 1e-4 \
+    --gradient_accumulation_steps 16 \
+    --eval_steps 100 \
+    --save_steps 100 \
+    --save_total_limit 2 \
+    --logging_steps 5 \
+    --model_author swift \
+    --model_name swift-robot
+```
+
+train_node2.sh
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+accelerate launch --config_file ./examples/train/multi-node/accelerate/multi_node.yaml --machine_rank 1 \
+    swift/cli/sft.py \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --train_type lora \
+    --torch_dtype bfloat16 \
+    --dataset 'swift/self-cognition#1000' \
+    --num_train_epochs 1 \
+    --lora_rank 8 \
+    --lora_alpha 32 \
+    --learning_rate 1e-4 \
+    --gradient_accumulation_steps 16 \
+    --eval_steps 100 \
+    --save_steps 100 \
+    --save_total_limit 2 \
+    --logging_steps 5 \
+    --model_author swift \
+    --model_name swift-robot
+```
+
+
+
+
+
+
+
+

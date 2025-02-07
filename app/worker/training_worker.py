@@ -7,6 +7,8 @@ from ..gpu.manager import GPUManager
 import aio_pika
 from ..job.store import JobStore, JobStatus
 from ..utils.logger import setup_logger
+import subprocess
+from ..training.swift_config import SwiftTrainingConfig
 
 class TrainingWorker:
     def __init__(self):
@@ -38,12 +40,46 @@ class TrainingWorker:
         self.logger.info(f"Processing job {job_id} on GPUs: {gpu_indices}")
         
         try:
-            gpu_str = ','.join(map(str, gpu_indices))
-            os.environ['CUDA_VISIBLE_DEVICES'] = gpu_str
+            # Extract training config from job_data
+            training_config_data = {
+                "model_type": job_data["model_type"],
+                "model_id_or_path": job_data["model_id_or_path"],
+                "dataset": job_data["dataset"],
+                "gpu_indices": gpu_indices,
+                # Add optional fields if they exist
+                "val_dataset": job_data.get("val_dataset"),
+                # Merge in the training_config dict
+                **job_data.get("training_config", {})
+            }
             
-            self.logger.info(f"Job {job_id}: Starting training process")
-            await asyncio.sleep(10)  # Simulate training
-            self.logger.info(f"Job {job_id}: Training completed")
+            # Create Swift training config
+            training_config = SwiftTrainingConfig(**training_config_data)
+            
+            # Generate command
+            command = training_config.get_command()
+            self.logger.info(f"Running command: {command}")
+            
+            # Run the training process
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Stream output
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    self.logger.info(output.strip())
+            
+            # Get return code
+            return_code = process.poll()
+            if return_code != 0:
+                raise Exception(f"Training failed with return code {return_code}")
             
             return {"status": "completed", "gpu_indices": gpu_indices}
         except Exception as e:

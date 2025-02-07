@@ -1,15 +1,16 @@
 # AI Training Pipeline
 
-A distributed system for managing AI model training jobs across multiple GPUs. This system provides a web interface for submitting training jobs, monitoring GPU usage, and tracking job status.
+A distributed system for managing AI model training jobs across multiple GPUs, with integrated support for ms-swift training. This system provides a web interface for submitting training jobs, monitoring GPU usage, and tracking job status.
 
 ## Features
 
-- 🚀 Submit training jobs with customizable hyperparameters
+- 🚀 Submit ms-swift training jobs with customizable hyperparameters
 - 📊 Real-time GPU monitoring and status updates
 - 🔄 Automatic job queuing when GPUs are occupied
 - 📝 Job history and status tracking
 - 🎯 Support for multi-GPU training jobs
 - 🔌 Distributed architecture using RabbitMQ
+- 🤖 Integrated with ms-swift for LLM and multi-modal model training
 
 ## System Architecture
 
@@ -24,13 +25,14 @@ The system consists of three main components:
 2. **Training Worker**
    - Processes training jobs from the queue
    - Manages GPU resources
+   - Executes ms-swift training commands
    - Updates job status
    - Handles training execution
 
 3. **Streamlit Frontend**
    - User-friendly web interface
    - Real-time GPU status display
-   - Job submission form
+   - Advanced job submission form with ms-swift parameters
    - Training job monitoring
 
 ## Prerequisites
@@ -39,6 +41,7 @@ The system consists of three main components:
 - NVIDIA GPU(s) with CUDA support
 - RabbitMQ Server
 - NVIDIA System Management Interface (nvidia-smi)
+- ms-swift 3.0.3+
 
 ## Installation
 
@@ -121,8 +124,10 @@ streamlit run streamlit_app.py
 
 1. Access the web interface at `http://localhost:8501`
 2. Submit a training job:
-   - Enter model name and dataset path
-   - Configure hyperparameters in JSON format
+   - Enter model type (e.g., "qwen2-vl-2b-instruct")
+   - Enter model path (e.g., "qwen/Qwen2-VL-2B-Instruct")
+   - Configure dataset paths
+   - Set training parameters (epochs, batch size, etc.)
    - Select number of GPUs
    - Click "Submit Job"
 3. Monitor GPU status and job progress in the respective tabs
@@ -147,6 +152,8 @@ ai_training_pipeline/
 │   │   └── store.py      # Job status tracking
 │   ├── rabbitmq/
 │   │   └── publisher.py  # RabbitMQ integration
+│   ├── training/
+│   │   └── swift_config.py  # ms-swift configuration
 │   ├── worker/
 │   │   └── training_worker.py  # Job processing
 │   └── utils/
@@ -176,14 +183,3 @@ Logs are stored in the `logs/` directory with separate files for each component:
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 ```
-
-This README provides:
-1. Project overview and features
-2. Installation instructions
-3. Configuration details
-4. Usage guide
-5. API documentation
-6. Project structure
-7. Contributing guidelines
-
-Would you like me to add or modify any section?

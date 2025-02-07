@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict
 import asyncio
 from .rabbitmq.publisher import RabbitMQPublisher
 from contextlib import asynccontextmanager
@@ -44,10 +44,12 @@ async def log_requests(request: Request, call_next):
     return response
 
 class TrainingJob(BaseModel):
-    model_name: str
-    dataset_path: str
-    hyperparameters: dict
+    model_type: str
+    model_id_or_path: str
+    dataset: str
+    val_dataset: Optional[str] = None
     gpu_count: Optional[int] = 1
+    training_config: Dict = {}
 
 @app.post("/submit_job")
 async def submit_job(job: TrainingJob):

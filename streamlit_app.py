@@ -27,47 +27,41 @@ def submit_job():
     st.header("Submit Training Job")
     
     with st.form("job_submission"):
-        # Create two columns
         col1, col2 = st.columns([1, 1])
         
-        # First column: Basic job settings
         with col1:
             st.subheader("Basic Settings")
-            model_name = st.text_input("Model Name")
+            model_type = st.text_input("Model Type", value="qwen2-vl-2b-instruct")
+            model_id = st.text_input("Model ID", value="qwen/Qwen2-VL-2B-Instruct")
             dataset_path = st.text_input("Dataset Path")
-            gpu_count = st.number_input("Number of GPUs", min_value=1, max_value=4, value=1)
+            val_dataset = st.text_input("Validation Dataset (Optional)")
+            gpu_count = st.number_input("Number of GPUs", min_value=1, max_value=4, value=4)
             
-            # Move submit button to bottom of first column
             submitted = st.form_submit_button("Submit Job", use_container_width=True)
         
-        # Second column: Hyperparameters
         with col2:
-            st.subheader("Hyperparameters")
-            st.caption("Configure training parameters in JSON format")
-            hyperparameters = st.text_area(
-                "",  # Remove label since we have a subheader
-                value=json.dumps({
-                    "learning_rate": 0.001,
-                    "batch_size": 32,
-                    "epochs": 10,
-                    "optimizer": "adam",
-                    "loss": "categorical_crossentropy"
-                }, indent=2),
-                height=300  # Make text area taller
-            )
+            st.subheader("Training Configuration")
+            training_config = {
+                "num_train_epochs": st.number_input("Number of Epochs", value=1, min_value=1),
+                "sft_type": st.selectbox("SFT Type", ["lora", "full", "qlora"]),
+                "batch_size": st.number_input("Batch Size", value=4, min_value=1),
+                "eval_steps": st.number_input("Eval Steps", value=150, min_value=1),
+                "max_new_tokens": st.number_input("Max New Tokens", value=128, min_value=1),
+                "gradient_accumulation_steps": st.number_input("Gradient Accumulation Steps", value=4, min_value=1),
+                "size_factor": st.number_input("Size Factor", value=8, min_value=1),
+                "max_pixels": st.number_input("Max Pixels", value=602112, min_value=1)
+            }
         
         if submitted:
             try:
-                logger.info(f"Submitting job with model: {model_name}")
-                # Validate hyperparameters JSON
-                hyperparams = json.loads(hyperparameters)
-                
-                # Prepare job data
+                # Prepare job data with Swift training config
                 job_data = {
-                    "model_name": model_name,
-                    "dataset_path": dataset_path,
-                    "hyperparameters": hyperparams,
-                    "gpu_count": gpu_count
+                    "model_type": model_type,
+                    "model_id_or_path": model_id,
+                    "dataset": dataset_path,
+                    "val_dataset": val_dataset if val_dataset else None,
+                    "gpu_count": gpu_count,
+                    "training_config": training_config
                 }
                 
                 # Submit job
@@ -76,8 +70,6 @@ def submit_job():
                 
                 logger.info(f"Job submitted successfully: {response.json()['job_id']}")
                 st.success(f"Job submitted successfully! Job ID: {response.json()['job_id']}")
-            except json.JSONDecodeError:
-                st.error("Invalid JSON format in hyperparameters")
             except Exception as e:
                 logger.error(f"Error submitting job: {str(e)}", exc_info=True)
                 st.error(f"Error submitting job: {str(e)}")
@@ -163,7 +155,9 @@ def display_jobs():
         for job_id, job in jobs.items():
             job_info = {
                 "Job ID": job_id[:8],
-                "Model": job["data"]["model_name"],
+                "Model": job["data"]["model_type"],
+                "Model Path": job["data"]["model_id_or_path"],
+                "Dataset": job["data"]["dataset"],
                 "GPUs": job["data"]["gpu_count"],
                 "Created": format_timestamp(job["created_at"]),
                 "Status": job["status"]

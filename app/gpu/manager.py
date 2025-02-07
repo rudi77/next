@@ -36,7 +36,7 @@ class GPUManager:
             logger.error("Failed to get GPU information from nvidia-smi")
             return []
 
-    async def get_free_gpus(self, required_memory: float = 8000) -> List[int]:
+    async def get_free_gpus(self, required_memory: float = 3000) -> List[int]:
         """Return indices of GPUs with enough free memory (in MB)"""
         logger.debug(f"Searching for GPUs with at least {required_memory}MB free memory")
         gpu_info = await self.get_gpu_info()
