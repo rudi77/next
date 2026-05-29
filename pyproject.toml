@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 training = ["ms-swift>=3.0.3"]
+mcp = ["mcp>=1.0"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
@@ -29,6 +30,7 @@ dev = [
 
 [project.scripts]
 trainpipe = "trainpipe.cli:main"
+trainpipe-mcp = "trainpipe.mcp:main"
 
 [build-system]
 requires = ["hatchling"]

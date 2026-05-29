@@ -82,13 +82,41 @@ Health check: `curl http://localhost:8080/health`.
 - ms-swift registry shortcuts: `"AI-ModelScope/alpaca-gpt4-data-en"`
 - Local files: `"/srv/data/train.jsonl"`, `"./train.jsonl"`, `"C:/data/train.jsonl"`
 - Local directories: `"/srv/data/my-dataset/"`
-- Any of the above with a sub-sample suffix: `"/srv/data/train.jsonl#500"`
+- **Uploaded dataset by id**: `"ds:<dataset_id>"`
+- Any of the above with a sub-sample suffix: `"/srv/data/train.jsonl#500"`, `"ds:abc123#500"`
+
+### Uploading your own data
+
+Instead of placing files on the server by hand, push them through the API:
+
+```bash
+curl -H "X-API-Key: $TRAINPIPE_API_KEY" \
+  -F "file=@./train.jsonl" \
+  -F "name=my-training-set" \
+  http://server:8080/datasets
+# → {"id": "abc123…", "format": "jsonl", "line_count": 500, "sha256": "…", …}
+```
+
+The server validates the format (samples the first 100 records — bad JSON,
+empty file, etc. is rejected with 422), computes a sha256, and stores under
+`data/datasets/<id>/`. Then reference it from a spec:
+
+```json
+{"model": "...", "dataset": ["ds:abc123"], "val_dataset": ["ds:abc123#50"]}
+```
+
+Endpoints: `GET /datasets`, `GET /datasets/{id}`,
+`GET /datasets/{id}/preview?n=10` (text formats only), `DELETE /datasets/{id}`.
+
+### Path validation
 
 Local-looking paths are validated at submit time — `POST /experiments`,
 `POST /experiments/batch`, and `POST /studies` all return **422** with a
 `missing_local_paths` detail listing every offending entry, so an agent
 can fix all of them in one round-trip. Remote refs (HF, registry) are
-accepted blindly and fail at trainer load if wrong.
+accepted blindly and fail at trainer load if wrong. Malformed `ds:` strings
+(no hex, unknown id) return **422** with `error: malformed_dataset_ref` or
+`error: unknown_dataset_ref`.
 
 Expected ms-swift JSONL formats:
 
@@ -190,6 +218,32 @@ and pick the next spec yourself.
 | POST   | `/studies/{id}/cancel`                | Stop driver, mark completed      |
 
 All routes except `/health` require the `X-API-Key` header.
+
+## MCP integration
+
+trainpipe ships an MCP server that mirrors the REST surface as
+Claude-Code-friendly tools. Install once:
+
+```bash
+pip install -e ".[mcp]"
+```
+
+Then register with Claude Code (run trainpipe locally first):
+
+```bash
+claude mcp add trainpipe -- env \
+  TRAINPIPE_API_KEY=$TRAINPIPE_API_KEY \
+  TRAINPIPE_BASE_URL=http://localhost:8080 \
+  python -m trainpipe.mcp
+```
+
+Tools exposed: `submit_experiment`, `get_experiment`, `list_experiments`,
+`cancel_experiment`, `tail_logs`, `submit_study`, `list_studies`,
+`get_study`, `cancel_study`, `gpu_status`, `upload_dataset`,
+`list_datasets`, `get_dataset`, `preview_dataset`, `delete_dataset`.
+
+Auth never leaks into the model context — the API key stays inside the
+MCP server process; the agent only sees tool calls and their results.
 
 ## Configuration
 
