@@ -1,185 +1,223 @@
-# AI Training Pipeline
+# trainpipe
 
-A distributed system for managing AI model training jobs across multiple GPUs, with integrated support for ms-swift training. This system provides a web interface for submitting training jobs, monitoring GPU usage, and tracking job status.
+An AI training pipeline for a single Linux box with 1-N NVIDIA GPUs. Submit
+`ms-swift` fine-tuning jobs (LoRA / full / qlora / longlora / adalora /
+ia3), watch them stream live to MLflow, queue more than you have GPUs for,
+and drive hyperparameter sweeps via Optuna — all through a small REST API
+that an agent (or a human) can drive.
 
-## Features
+## Architecture
 
-- 🚀 Submit ms-swift training jobs with customizable hyperparameters
-- 📊 Real-time GPU monitoring and status updates
-- 🔄 Automatic job queuing when GPUs are occupied
-- 📝 Job history and status tracking
-- 🎯 Support for multi-GPU training jobs
-- 🔌 Distributed architecture using RabbitMQ
-- 🤖 Integrated with ms-swift for LLM and multi-modal model training
-
-## System Architecture
-
-The system consists of three main components:
-
-1. **FastAPI Backend**
-   - Handles job submissions
-   - Manages GPU allocation
-   - Provides REST API endpoints
-   - Integrates with RabbitMQ for job queuing
-
-2. **Training Worker**
-   - Processes training jobs from the queue
-   - Manages GPU resources
-   - Executes ms-swift training commands
-   - Updates job status
-   - Handles training execution
-
-3. **Streamlit Frontend**
-   - User-friendly web interface
-   - Real-time GPU status display
-   - Advanced job submission form with ms-swift parameters
-   - Training job monitoring
-
-## Prerequisites
-
-- Python 3.8+
-- NVIDIA GPU(s) with CUDA support
-- RabbitMQ Server
-- NVIDIA System Management Interface (nvidia-smi)
-- ms-swift 3.0.3+
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/ai-training-pipeline.git
-cd ai-training-pipeline
+```
+┌──────────────────────── Linux host (≥1 GPU) ────────────────────────┐
+│                                                                     │
+│  ┌────────────┐        ┌──────────────────┐                         │
+│  │  FastAPI   │ ──────►│  MLflow server   │◄── browser UI           │
+│  │  + auth    │ create │  (sqlite + fs    │                         │
+│  │            │  run   │   artifacts)     │                         │
+│  └─────┬──────┘        └──────────────────┘                         │
+│        │                          ▲ metrics + checkpoints           │
+│        ▼                          │ (HF Trainer → MLflowCallback)   │
+│  ┌────────────┐         ┌─────────┴────────┐                        │
+│  │  SQLite    │◄───────►│   Scheduler      │                        │
+│  │  queue +   │ status  │  (asyncio loop,  │                        │
+│  │  studies + │         │   GPU pool,      │                        │
+│  │  events    │         │   subprocess mgr)│                        │
+│  └────────────┘         └─────────┬────────┘                        │
+│                                   │ spawns one process per run     │
+│                  ┌─────────┬──────┼──────┬─────────┐                │
+│                  ▼         ▼      ▼      ▼         ▼                │
+│                GPU 0     GPU 1  GPU 2  GPU 3    (idle)              │
+│                swift sft (CUDA_VISIBLE_DEVICES + MLFLOW_RUN_ID)     │
+│                                                                     │
+│  ┌────────────┐  ask trial → enqueue exp → wait → read metric       │
+│  │  Optuna    │  tell trial. Up to max_concurrent in parallel.      │
+│  │  drivers   │  Per-study sqlite under data/studies/.              │
+│  └────────────┘                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+        ▲ X-API-Key            ▲ http                ▲ ssh / tailscale
+   agent / CLI            MLflow UI               remote dev
 ```
 
-2. Create a virtual environment:
+## What it does
+
+- Queue 1..N concurrent ms-swift training runs across the local GPUs.
+- One MLflow run per experiment, with our `trainpipe.experiment_id` /
+  `trainpipe.study_id` / `trainpipe.trial_number` tags so the UI groups
+  related runs.
+- Live log streaming over Server-Sent Events.
+- Crash recovery: a process restart releases stale GPU leases and
+  requeues experiments that were running pre-crash.
+- Hyperparameter sweeps via Optuna with a JSON-path-based search-space
+  DSL — submit one `StudyConfig` and trials get enqueued automatically.
+- Single API surface for both humans and agents.
+
+## Setup
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# 1. Python deps
+python -m venv .venv
+source .venv/bin/activate          # Linux: deployment target
+pip install -e ".[training]"        # add `,dev` for tests + linting
+
+# 2. MLflow tracking server
+docker compose up -d
+# → http://localhost:5000
+
+# 3. Configure
+cp .env.example .env
+# edit TRAINPIPE_API_KEY, optionally TRAINPIPE_VISIBLE_GPUS
+
+# 4. Run
+trainpipe                           # uvicorn on :8080
 ```
 
-3. Install dependencies:
+Health check: `curl http://localhost:8080/health`.
+
+## Submitting an experiment
+
 ```bash
-pip install -r requirements.txt
+curl -X POST http://localhost:8080/experiments \
+  -H "X-API-Key: $TRAINPIPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "qwen2-vl-lora",
+    "model": "qwen/Qwen2-VL-2B-Instruct",
+    "sft_type": "lora",
+    "dataset": ["AI-ModelScope/alpaca-gpt4-data-en"],
+    "gpu_count": 1,
+    "hyperparameters": {
+      "num_train_epochs": 3,
+      "learning_rate": 1e-4,
+      "lora_rank": 8
+    },
+    "tags": {"mlflow_experiment": "vlm-explore"}
+  }'
+# → {"experiment_id": "..."}
 ```
 
-4. Install and start RabbitMQ:
+Watch live logs:
+
 ```bash
-# For Ubuntu/Debian
-sudo apt-get install rabbitmq-server
-sudo systemctl start rabbitmq-server
-
-# For macOS
-brew install rabbitmq
-brew services start rabbitmq
-
-# Using Docker (recommended for local development)
-docker run -d --name rabbitmq \
-    -p 5672:5672 -p 15672:15672 \
-    -e RABBITMQ_DEFAULT_USER=guest \
-    -e RABBITMQ_DEFAULT_PASS=guest \
-    rabbitmq:3-management
+curl -N http://localhost:8080/experiments/<id>/logs/stream \
+  -H "X-API-Key: $TRAINPIPE_API_KEY"
 ```
 
-If using Docker, you can manage RabbitMQ through the web interface at `http://localhost:15672` (login with guest/guest).
+GPU state:
+
+```bash
+curl http://localhost:8080/gpus -H "X-API-Key: $TRAINPIPE_API_KEY"
+```
+
+## Agent-driven autoresearch
+
+A study is a Pydantic spec: `base_spec` (an `ExperimentSpec`), `search_space`
+(dotted paths into the spec → range), `target_metric` (read from MLflow on
+trial completion), `direction`, `n_trials`, `max_concurrent`, `sampler`.
+
+```bash
+curl -X POST http://localhost:8080/studies \
+  -H "X-API-Key: $TRAINPIPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "lr-rank-sweep",
+    "base_spec": {
+      "model": "qwen/Qwen2-VL-2B-Instruct",
+      "dataset": ["AI-ModelScope/alpaca-gpt4-data-en"],
+      "sft_type": "lora"
+    },
+    "search_space": {
+      "hyperparameters.learning_rate": {"kind": "loguniform", "low": 1e-5, "high": 1e-3},
+      "hyperparameters.lora_rank":     {"kind": "categorical", "choices": [4, 8, 16, 32]}
+    },
+    "target_metric": "eval/loss",
+    "direction": "minimize",
+    "n_trials": 20,
+    "max_concurrent": 4,
+    "sampler": "tpe"
+  }'
+```
+
+The driver `ask()`s Optuna, samples a spec, enqueues it as an experiment,
+waits for it to terminate, reads `eval/loss` from MLflow, then `tell()`s
+Optuna. Up to `max_concurrent` trials run in parallel — capped at whatever
+the GPU pool allows.
+
+For an agent doing freer-form autoresearch (not just a fixed search space),
+talk directly to `POST /experiments` in a loop, read run metrics from MLflow,
+and pick the next spec yourself.
+
+## REST API
+
+| Method | Path                                  | Purpose                          |
+| ------ | ------------------------------------- | -------------------------------- |
+| GET    | `/health`                             | Liveness (no auth)               |
+| POST   | `/experiments`                        | Submit one experiment            |
+| POST   | `/experiments/batch`                  | Submit a list                    |
+| GET    | `/experiments`                        | List (filter: status, study_id)  |
+| GET    | `/experiments/{id}`                   | Detail                           |
+| POST   | `/experiments/{id}/cancel`            | Cancel (queued or running)       |
+| GET    | `/experiments/{id}/logs`              | Download full log                |
+| GET    | `/experiments/{id}/logs/stream`       | SSE live tail                    |
+| GET    | `/gpus`                               | Pool state with leases           |
+| POST   | `/studies`                            | Create + start a sweep           |
+| GET    | `/studies`                            | List studies                     |
+| GET    | `/studies/{id}`                       | Detail (best_value, best_trial)  |
+| POST   | `/studies/{id}/cancel`                | Stop driver, mark completed      |
+
+All routes except `/health` require the `X-API-Key` header.
 
 ## Configuration
 
-Create a `.env` file in the project root:
-```env
-RABBITMQ_HOST=localhost
-RABBITMQ_PORT=5672
-RABBITMQ_USER=guest
-RABBITMQ_PASSWORD=guest
+All settings are prefixed `TRAINPIPE_` and loaded from `.env` or the
+environment.
+
+| Var                          | Default                  | Notes                                  |
+| ---------------------------- | ------------------------ | -------------------------------------- |
+| `TRAINPIPE_API_KEY`          | `dev-key-change-me`      | Required for every non-health route    |
+| `TRAINPIPE_HOST`             | `0.0.0.0`                |                                        |
+| `TRAINPIPE_PORT`             | `8080`                   |                                        |
+| `TRAINPIPE_DATA_DIR`         | `./data`                 | sqlite, logs, outputs, study storage   |
+| `TRAINPIPE_MLFLOW_TRACKING_URI` | `http://localhost:5000` | MLflow server                       |
+| `TRAINPIPE_VISIBLE_GPUS`     | unset                    | JSON list, e.g. `[0,1]`. Default: all  |
+| `TRAINPIPE_POLL_INTERVAL_SEC` | `1.0`                    | Scheduler tick                         |
+| `TRAINPIPE_HEARTBEAT_INTERVAL_SEC` | `5.0`              | Reserved                               |
+
+## Project layout
+
+```
+trainpipe/
+├── api/
+│   ├── main.py               FastAPI app + lifespan
+│   ├── auth.py               X-API-Key middleware
+│   ├── deps.py               typed accessors from app.state
+│   ├── schemas.py            ExperimentSpec, StudyConfig, …
+│   └── routes/{experiments,gpus,studies}.py
+├── core/
+│   ├── db.py                 aiosqlite, WAL, versioned migrations
+│   └── repository.py         CRUD for experiments, studies, events
+├── scheduler/
+│   ├── gpu_pool.py           pynvml detection + SQLite-backed leases
+│   ├── runner.py             asyncio subprocess + POSIX process group
+│   └── loop.py               dispatch + monitor + MLflow run creation
+├── training/
+│   └── swift_builder.py      ExperimentSpec → (argv, env)
+├── autoresearch/
+│   ├── search_spaces.py      dotted-path overrides + suggest_* dispatch
+│   ├── study.py              StudyDriver: ask → enqueue → wait → tell
+│   └── manager.py            owns drivers in the API process
+├── settings.py
+└── cli.py                    `trainpipe` entry point
 ```
 
-## Running the Application
+## Development
 
-You can run each component separately or use VS Code's launch configurations.
-
-### Using VS Code
-
-1. Open the project in VS Code
-2. Go to the "Run and Debug" view (Ctrl+Shift+D)
-3. Select "Full Stack" from the dropdown
-4. Press F5 to start all components
-
-### Manual Start
-
-1. Start the FastAPI backend:
 ```bash
-uvicorn app.main:app --reload --port 8080
+pip install -e ".[dev]"
+pytest                              # 51 unit tests, all should pass
+ruff check trainpipe tests
 ```
-
-2. Start the training worker:
-```bash
-python -m app.run_worker
-```
-
-3. Start the Streamlit frontend:
-```bash
-streamlit run streamlit_app.py
-```
-
-## Usage
-
-1. Access the web interface at `http://localhost:8501`
-2. Submit a training job:
-   - Enter model type (e.g., "qwen2-vl-2b-instruct")
-   - Enter model path (e.g., "qwen/Qwen2-VL-2B-Instruct")
-   - Configure dataset paths
-   - Set training parameters (epochs, batch size, etc.)
-   - Select number of GPUs
-   - Click "Submit Job"
-3. Monitor GPU status and job progress in the respective tabs
-
-## API Endpoints
-
-- `POST /submit_job`: Submit a new training job
-- `GET /gpu_status`: Get current GPU status
-- `GET /jobs`: List all jobs
-- `GET /job/{job_id}`: Get specific job status
-
-## Project Structure
-
-```
-ai_training_pipeline/
-├── app/
-│   ├── main.py           # FastAPI application
-│   ├── config.py         # Configuration settings
-│   ├── gpu/
-│   │   └── manager.py    # GPU management
-│   ├── job/
-│   │   └── store.py      # Job status tracking
-│   ├── rabbitmq/
-│   │   └── publisher.py  # RabbitMQ integration
-│   ├── training/
-│   │   └── swift_config.py  # ms-swift configuration
-│   ├── worker/
-│   │   └── training_worker.py  # Job processing
-│   └── utils/
-│       └── logger.py     # Logging configuration
-├── logs/                 # Log files
-├── streamlit_app.py      # Web interface
-├── requirements.txt      # Dependencies
-└── README.md
-```
-
-## Logging
-
-Logs are stored in the `logs/` directory with separate files for each component:
-- `backend_YYYYMMDD.log`
-- `worker_YYYYMMDD.log`
-- `streamlit_YYYYMMDD.log`
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-```
+MIT.

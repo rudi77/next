@@ -272,22 +272,20 @@ def test_cancel_study_404_when_no_record(state, client):
 
 
 def test_cancel_study_invokes_manager_when_record_exists(state, client):
-    # Insert a study row directly so the route's 404 check passes.
-    async def insert():
-        from trainpipe.api.schemas import StudyConfig
+    cfg = StudyConfig(
+        name="s",
+        base_spec=ExperimentSpec(model="m", dataset=["d"]),
+        search_space={
+            "hyperparameters.learning_rate": {
+                "kind": "loguniform",
+                "low": 1e-5,
+                "high": 1e-2,
+            }
+        },
+        target_metric="eval/loss",
+    )
 
-        cfg = StudyConfig(
-            name="s",
-            base_spec=ExperimentSpec(model="m", dataset=["d"]),
-            search_space={
-                "hyperparameters.learning_rate": {
-                    "kind": "loguniform",
-                    "low": 1e-5,
-                    "high": 1e-2,
-                }
-            },
-            target_metric="eval/loss",
-        )
+    async def insert():
         async with state["db"].connect() as conn:
             return await repository.create_study(conn, cfg, "sqlite:///dummy")
 
