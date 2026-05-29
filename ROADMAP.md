@@ -20,7 +20,11 @@ erfüllt ist.
 
 ## Currently in focus
 
-> **Phase 6 — Eval-Framework**. Ohne Eval ist „verbessern" blind.
+> **Phase 6 ✅ vollständig abgeschlossen (2026-05-29)** — Eval-Framework
+> end-to-end mit 5 Metric-Backends (incl. BLEU), MLflow-Publish nach
+> Completion, REST + UI + Auto-Hook + MockBackend für CI, Transformers
+> als Production-Backend. 246 Tests grün, alle Phase-6-Items abgehakt.
+> Nächste Phase: **Phase 7 — Modell-Registry & Promotion**.
 
 ---
 
@@ -37,6 +41,10 @@ erfüllt ist.
 - [x] MLflow Wiring (Auto-Tags, Run-Finalize, Credential-Stripping in /ui/config)
 - [x] Path-Validation am Submit (422 statt Trainer-Crash)
 - [x] Empty-Dataset-Check route-level
+- [x] **Phase 6 ✅**: Eval-Framework (Suites, Runs, Results) — 4 Metric-Backends
+  (exact_match, field_level_f1, rouge_l, llm_as_judge), Plugin-Scan,
+  in-process Driver+Dispatcher, REST + UI + auto_eval-Hook nach Training,
+  Compare-API mit Δ + Regression-Detection
 
 Was bis hier fehlt um „zentrale LLM-Plattform" zu sein:
 Evaluierung jenseits von train_loss · Modell-Promotion · Inference-Probe ·
@@ -55,49 +63,63 @@ einzelnen Beispiele bei denen einer regressed ist.
 → Comparison-UI zeigt run A vs run B mit per-sample Δ` funktioniert.
 
 ### Schema + DB
-- [ ] Migration v3: `eval_suites`, `eval_runs`, `eval_results`
-- [ ] Pydantic-Modelle: `EvalSuite`, `EvalRun`, `EvalResult`, `MetricConfig`
-- [ ] Repository CRUD
+- [x] Migration v3: `eval_suites`, `eval_runs`, `eval_results`
+- [x] Pydantic-Modelle: `EvalSuite`, `EvalRun`, `EvalResult`, `MetricConfig`
+- [x] Repository CRUD
 
 ### Metric-Backends
-- [ ] `exact_match` (für Extraktion / strukturierte Outputs)
-- [ ] `field_level_f1` (JSON vs Gold-JSON, schema-aware, partial credit)
-- [ ] `rouge_l` (für Chat-Antworten)
-- [ ] `llm_as_judge` mit Claude/GPT-4 — Provider env-konfigurierbar,
-  Rubrik als YAML
-- [ ] `bleu` (optional)
-- [ ] Plugin-Interface: weitere Metrics als Python-Entry-Point registrierbar
+- [x] `exact_match` (für Extraktion / strukturierte Outputs)
+- [x] `field_level_f1` (JSON vs Gold-JSON, flatten + partial credit)
+- [x] `rouge_l` (LCS-F1 über Whitespace-Tokens, beta-weighted)
+- [x] `llm_as_judge` mit Anthropic/OpenAI — Provider env-konfigurierbar,
+  Rubrik als YAML, retries + score-normalization
+- [x] `bleu` (sentence-level, n-gram precision + BP, Chen-&-Cherry-Smoothing,
+  eigene Implementation ohne sacrebleu/nltk-Dep)
+- [x] Plugin-Interface: Directory-Scan unter `trainpipe/evals/metrics/`
 
 ### Eval-Runner
-- [ ] Spawnt `swift infer` (oder vLLM-Call) gegen den Adapter eines
-  fertigen Runs
-- [ ] Pro Sample: prediction + gold + per-metric Score → `eval_results`
-- [ ] Aggregat: mean, std, count, per-class wenn anwendbar
-- [ ] Reuse Scheduler-Lease-Logic für GPU-Belegung
+- [x] In-process Driver mit pluggable Inference-Backend
+  (TransformersInferenceBackend prod default, MockInferenceBackend für Tests).
+  Swift/vLLM-Backends als zukünftige Plugins.
+- [x] Pro Sample: prediction + gold + per-metric Score → `eval_results`
+- [x] Aggregat: mean, std, count via Metric.aggregate()
+- [x] Reuse GpuPool für Lease-Belegung (geteilter Pool mit Training);
+  EvalDispatcher mit Crash-Recovery + atomic claim
 
 ### API
-- [ ] `POST /evals/suites` — create + validate (Dataset existiert, Metric-Config parsed)
-- [ ] `GET /evals/suites`, `GET /evals/suites/{id}`, `DELETE`
-- [ ] `POST /evals/runs` — manuell triggern (`model_target + suite_id`)
-- [ ] `GET /evals/runs/{id}` incl. per-sample
-- [ ] `GET /evals/compare?run_ids=a,b,c` — n-way Vergleich + Δ-Berechnung
+- [x] `POST /evals/suites` — create + validate (ds:-ref resolve, Metric-Config validate)
+- [x] `GET /evals/suites`, `GET /evals/suites/{id}`, `DELETE` (?force= zum
+  Lösen aktiver Runs via CASCADE)
+- [x] `POST /evals/runs` — manuell triggern (`suite_id + experiment_id`)
+- [x] `GET /evals/runs`, `GET /evals/runs/{id}`, `GET /evals/runs/{id}/results`,
+  `POST /evals/runs/{id}/cancel`
+- [x] `GET /evals/compare?run_ids=a,b,c` — n-way Vergleich, Δ-Aggregat +
+  Regressions-Liste per Sample
 
 ### After-Training-Hook
-- [ ] `ExperimentSpec.auto_eval: list[suite_id]` Feld
-- [ ] Scheduler triggert Eval nach `status=completed`
-- [ ] Eval-Result mit `experiment_id` verknüpft
+- [x] `ExperimentSpec.auto_eval: list[suite_id]` Feld
+- [x] Scheduler triggert Eval nach `status=completed` (Scheduler._enqueue_auto_evals)
+- [x] Eval-Run mit `experiment_id` verknüpft, `triggered_by="auto"`,
+  unbekannte Suite-IDs als WARN geloggt statt zu failen
 
 ### UI
-- [ ] Tab „Evals": Suites listen + erstellen
-- [ ] Per-Experiment Panel mit Eval-Resultaten
-- [ ] Comparison-View: 2-N Runs nebeneinander, mit
-  Δ-Highlights für regressierte Beispiele
-- [ ] MLflow-Run-Tags um Eval-Resultate ergänzen (Sortierung/Filter)
+- [x] Tab „Evals": Suites listen + erstellen (JSON-Editor wie bei Studies)
+- [x] Per-Run-Detail mit Aggregate + Per-Sample-Predictions + Scores
+- [x] Comparison-View: Checkbox-Auswahl auf der Runs-Tabelle → Compare-Modal
+  mit Aggregate-Δ-Tabelle + Liste der Samples die zwischen Runs divergieren
+- [x] MLflow-Metrics + Tags für Eval-Resultate: nach jedem completed eval
+  wird `eval.<suite>.<metric>` (mean/std/count) als Metric auf den
+  Experiment-Run gepusht, plus Tag `trainpipe.eval.<suite>` mit der
+  eval_run_id → Sortier-/Filterbar in der MLflow-UI
 
 ### Tests
-- [ ] Metric unit tests (edge cases: leere Outputs, falscher Schema-Typ, Unicode)
-- [ ] Eval-Runner mit gemocktem swift infer
-- [ ] End-to-end smoke: Experiment → Auto-Eval → Result via API
+- [x] Metric unit tests (15 exact_match + 31 für field_level_f1/rouge_l/
+  llm_as_judge inkl. edge cases: leere Outputs, invalid JSON,
+  case-(in)sensitivity, retries, scale-normalization)
+- [x] Eval-Runner mit MockInferenceBackend, inkl. predict-failure per sample,
+  missing-dataset, unknown-metric, sample_limit, dispatcher drain + recovery
+- [x] End-to-end smoke (tests/test_eval_e2e.py): create suite → 2 Experimente
+  mit auto_eval → Scheduler-Hook → Dispatcher → Compare-API mit per-sample Δ
 
 ---
 
@@ -453,18 +475,18 @@ Produkt-Codes) als zusätzliche Tokens, damit das Modell sie nicht in
   experiment_tracking + artifact storage. Wir bauen darauf auf statt
   drumrum.
 
-## Offene Architektur-Fragen (zu klären in Phase 6 Kick-off)
+## Architektur-Entscheidungen (Phase 6 Kick-off, 2026-05-29)
 
-- Eval-Runner: in-process im trainpipe-Scheduler oder separater
-  Worker-Pool? Beide haben Pros — in-process ist simpler, separater
-  Pool skaliert besser bei vielen LLM-as-Judge-Calls
-- Metric-Plugin-Mechanismus: Entry-Point in pyproject oder
-  Verzeichnis-Scan unter `trainpipe/evals/metrics/`?
-- LLM-as-Judge: über die `claude-api` Skill (intern) oder direkt
-  Anthropic SDK?
-- Streaming-Inference: SSE oder WebSocket? SSE konsistent mit
-  bestehenden /logs/stream, aber WebSocket erlaubt bidirektional
-  (z.B. interrupt mid-generation)
+- **Eval-Runner: in-process im Scheduler.** Wiederverwendet Lease-Logic,
+  GPU-Pool, Crash-Recovery. Wenn LLM-as-Judge später throughput-limitiert
+  wird, separater Pool als Folge-Refactor.
+- **Metric-Plugins: Directory-Scan unter `trainpipe/evals/metrics/`.**
+  Jede Datei mit einer `Metric`-Subklasse wird beim Start registriert.
+  Entry-Points kommen wenn externe Pakete Metrics liefern sollen.
+- **LLM-as-Judge: direkt Anthropic + OpenAI SDK** (Provider env-konfigurierbar,
+  Modell pro Suite). Rubrik als YAML im Suite-Spec.
+- **Streaming-Inference (Phase 8): SSE.** Konsistent mit `/logs/stream`.
+  Interrupt via separates `DELETE /inferences/{id}` statt bidirektional.
 
 ## Referenzen
 

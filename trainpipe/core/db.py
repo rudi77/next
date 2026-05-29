@@ -77,6 +77,59 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_datasets_name ON datasets(name);
     CREATE INDEX idx_datasets_sha ON datasets(sha256);
     """,
+    # v3: eval framework — suites (reusable config), runs (one execution
+    # against one model target), results (per-sample prediction + scores).
+    """
+    CREATE TABLE eval_suites (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        dataset_path TEXT NOT NULL,
+        metrics_json TEXT NOT NULL,
+        inference_params_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_eval_suites_name ON eval_suites(name);
+
+    CREATE TABLE eval_runs (
+        id TEXT PRIMARY KEY,
+        suite_id TEXT NOT NULL,
+        experiment_id TEXT,
+        model_ref TEXT NOT NULL,
+        status TEXT NOT NULL,
+        gpu_ids TEXT,
+        log_path TEXT,
+        error TEXT,
+        pid INTEGER,
+        aggregate_json TEXT,
+        sample_count INTEGER,
+        triggered_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        FOREIGN KEY (suite_id) REFERENCES eval_suites(id) ON DELETE CASCADE,
+        FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE SET NULL
+    );
+    CREATE INDEX idx_eval_runs_suite ON eval_runs(suite_id);
+    CREATE INDEX idx_eval_runs_experiment ON eval_runs(experiment_id);
+    CREATE INDEX idx_eval_runs_status ON eval_runs(status);
+
+    CREATE TABLE eval_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        sample_index INTEGER NOT NULL,
+        input_json TEXT NOT NULL,
+        prediction TEXT NOT NULL,
+        gold_json TEXT,
+        scores_json TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES eval_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_eval_results_run ON eval_results(run_id);
+    CREATE UNIQUE INDEX idx_eval_results_run_sample
+        ON eval_results(run_id, sample_index);
+    """,
 ]
 
 

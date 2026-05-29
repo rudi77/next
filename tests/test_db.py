@@ -11,6 +11,9 @@ async def test_init_creates_expected_tables(db):
         "gpu_leases",
         "events",
         "datasets",
+        "eval_suites",
+        "eval_runs",
+        "eval_results",
         "schema_version",
     ):
         assert table in names, f"missing table: {table}"

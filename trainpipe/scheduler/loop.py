@@ -349,11 +349,47 @@ class Scheduler:
                 status,
                 return_code,
             )
+
+            if status == "completed":
+                await self._enqueue_auto_evals(experiment_id)
         except Exception:
             logger.exception("monitor crashed for %s", experiment_id)
         finally:
             self._running.pop(experiment_id, None)
             self._monitors.pop(experiment_id, None)
+
+    async def _enqueue_auto_evals(self, experiment_id: str) -> None:
+        """After a successful training run, enqueue one eval per suite in
+        ``spec.auto_eval``. Unknown suite IDs are logged and skipped rather
+        than failing the just-completed experiment.
+        """
+        async with self.db.connect() as conn:
+            rec = await repository.get_experiment(conn, experiment_id)
+            if rec is None or not rec.spec.auto_eval:
+                return
+            model_ref = rec.spec.name or experiment_id
+            for suite_id in rec.spec.auto_eval:
+                suite = await repository.get_eval_suite(conn, suite_id)
+                if suite is None:
+                    logger.warning(
+                        "auto_eval skipped: suite=%s unknown for experiment=%s",
+                        suite_id,
+                        experiment_id,
+                    )
+                    continue
+                run_id = await repository.create_eval_run(
+                    conn,
+                    suite_id=suite_id,
+                    experiment_id=experiment_id,
+                    model_ref=model_ref,
+                    triggered_by="auto",
+                )
+                logger.info(
+                    "auto_eval enqueued: run=%s suite=%s experiment=%s",
+                    run_id,
+                    suite_id,
+                    experiment_id,
+                )
 
 
 def _create_mlflow_run(

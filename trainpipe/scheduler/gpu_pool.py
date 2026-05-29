@@ -79,7 +79,12 @@ class GpuPool:
         return len(self.gpus)
 
     async def sync_leases(self, conn: aiosqlite.Connection) -> None:
-        """Ensure one row per detected GPU; release any orphaned leases."""
+        """Ensure one row per detected GPU; release any orphaned leases.
+
+        Note: the ``experiment_id`` column is overloaded — both experiments
+        and eval_runs share this pool, identified by their primary key. We
+        exempt both running tables from the orphan sweep.
+        """
         cur = await conn.execute("SELECT gpu_index FROM gpu_leases")
         existing = {row[0] for row in await cur.fetchall()}
 
@@ -91,11 +96,11 @@ class GpuPool:
                     (idx,),
                 )
 
-        # Free leases whose experiment is no longer running.
         await conn.execute(
             "UPDATE gpu_leases SET experiment_id = NULL, leased_at = NULL "
-            "WHERE experiment_id IS NOT NULL AND experiment_id NOT IN "
-            "(SELECT id FROM experiments WHERE status = 'running')"
+            "WHERE experiment_id IS NOT NULL "
+            "AND experiment_id NOT IN (SELECT id FROM experiments WHERE status = 'running') "
+            "AND experiment_id NOT IN (SELECT id FROM eval_runs WHERE status = 'running')"
         )
         await conn.commit()
 

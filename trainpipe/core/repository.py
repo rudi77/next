@@ -14,9 +14,16 @@ import aiosqlite
 
 from ..api.schemas import (
     Dataset,
+    EvalResult,
+    EvalRun,
+    EvalRunStatus,
+    EvalSuite,
     ExperimentRecord,
     ExperimentSpec,
     ExperimentStatus,
+    InferenceParams,
+    MetricAggregate,
+    MetricConfig,
     StudyConfig,
     StudyRecord,
     StudyStatus,
@@ -353,3 +360,373 @@ async def active_experiments_referencing_path(
         if any(r.split("#", 1)[0] == path for r in refs):
             hits.append(row["id"])
     return hits
+
+
+# ---------------------------------------------------------------------------
+# Eval framework
+# ---------------------------------------------------------------------------
+
+
+def _row_to_eval_suite(row: aiosqlite.Row) -> EvalSuite:
+    metrics_raw = json.loads(row["metrics_json"])
+    return EvalSuite(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        dataset_path=row["dataset_path"],
+        metrics=[MetricConfig.model_validate(m) for m in metrics_raw],
+        inference_params=InferenceParams.model_validate_json(
+            row["inference_params_json"]
+        ),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+async def create_eval_suite(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    description: str | None,
+    dataset_path: str,
+    metrics: list[MetricConfig],
+    inference_params: InferenceParams,
+    suite_id: str | None = None,
+) -> str:
+    if suite_id is None:
+        suite_id = uuid.uuid4().hex
+    await conn.execute(
+        "INSERT INTO eval_suites (id, name, description, dataset_path, "
+        "metrics_json, inference_params_json, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            suite_id,
+            name,
+            description,
+            dataset_path,
+            json.dumps([m.model_dump() for m in metrics]),
+            inference_params.model_dump_json(),
+            utcnow_iso(),
+        ),
+    )
+    await conn.commit()
+    return suite_id
+
+
+async def get_eval_suite(
+    conn: aiosqlite.Connection, suite_id: str
+) -> EvalSuite | None:
+    cur = await conn.execute("SELECT * FROM eval_suites WHERE id = ?", (suite_id,))
+    row = await cur.fetchone()
+    return _row_to_eval_suite(row) if row else None
+
+
+async def get_eval_suite_by_name(
+    conn: aiosqlite.Connection, name: str
+) -> EvalSuite | None:
+    cur = await conn.execute(
+        "SELECT * FROM eval_suites WHERE name = ? LIMIT 1", (name,)
+    )
+    row = await cur.fetchone()
+    return _row_to_eval_suite(row) if row else None
+
+
+async def list_eval_suites(conn: aiosqlite.Connection) -> list[EvalSuite]:
+    cur = await conn.execute("SELECT * FROM eval_suites ORDER BY created_at DESC")
+    rows = await cur.fetchall()
+    return [_row_to_eval_suite(r) for r in rows]
+
+
+async def delete_eval_suite(conn: aiosqlite.Connection, suite_id: str) -> bool:
+    cur = await conn.execute("DELETE FROM eval_suites WHERE id = ?", (suite_id,))
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def active_eval_runs_for_suite(
+    conn: aiosqlite.Connection, suite_id: str
+) -> list[str]:
+    """Return ids of non-terminal eval runs against ``suite_id``."""
+    cur = await conn.execute(
+        "SELECT id FROM eval_runs WHERE suite_id = ? AND status IN ('queued', 'running')",
+        (suite_id,),
+    )
+    rows = await cur.fetchall()
+    return [r["id"] for r in rows]
+
+
+def _row_to_eval_run(row: aiosqlite.Row) -> EvalRun:
+    aggregate_raw = row["aggregate_json"]
+    aggregate: dict[str, MetricAggregate] | None = None
+    if aggregate_raw:
+        parsed = json.loads(aggregate_raw)
+        aggregate = {k: MetricAggregate.model_validate(v) for k, v in parsed.items()}
+    return EvalRun(
+        id=row["id"],
+        suite_id=row["suite_id"],
+        experiment_id=row["experiment_id"],
+        model_ref=row["model_ref"],
+        status=EvalRunStatus(row["status"]),
+        gpu_ids=json.loads(row["gpu_ids"]) if row["gpu_ids"] else None,
+        log_path=row["log_path"],
+        error=row["error"],
+        aggregate=aggregate,
+        sample_count=row["sample_count"],
+        triggered_by=row["triggered_by"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+        finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+    )
+
+
+async def create_eval_run(
+    conn: aiosqlite.Connection,
+    *,
+    suite_id: str,
+    experiment_id: str | None,
+    model_ref: str,
+    triggered_by: str,
+    run_id: str | None = None,
+) -> str:
+    if run_id is None:
+        run_id = uuid.uuid4().hex
+    now = utcnow_iso()
+    await conn.execute(
+        "INSERT INTO eval_runs (id, suite_id, experiment_id, model_ref, status, "
+        "triggered_by, created_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
+        (run_id, suite_id, experiment_id, model_ref, triggered_by, now),
+    )
+    await conn.execute(
+        "INSERT INTO events (experiment_id, study_id, kind, payload_json, created_at) "
+        "VALUES (?, ?, 'eval_queued', ?, ?)",
+        (
+            experiment_id,
+            None,
+            json.dumps({"eval_run_id": run_id, "suite_id": suite_id}),
+            now,
+        ),
+    )
+    await conn.commit()
+    return run_id
+
+
+async def get_eval_run(
+    conn: aiosqlite.Connection, run_id: str
+) -> EvalRun | None:
+    cur = await conn.execute("SELECT * FROM eval_runs WHERE id = ?", (run_id,))
+    row = await cur.fetchone()
+    return _row_to_eval_run(row) if row else None
+
+
+async def list_eval_runs(
+    conn: aiosqlite.Connection,
+    *,
+    suite_id: str | None = None,
+    experiment_id: str | None = None,
+    status: EvalRunStatus | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[EvalRun]:
+    sql = "SELECT * FROM eval_runs WHERE 1=1"
+    args: list[Any] = []
+    if suite_id:
+        sql += " AND suite_id = ?"
+        args.append(suite_id)
+    if experiment_id:
+        sql += " AND experiment_id = ?"
+        args.append(experiment_id)
+    if status:
+        sql += " AND status = ?"
+        args.append(status.value)
+    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    args += [limit, offset]
+    cur = await conn.execute(sql, args)
+    rows = await cur.fetchall()
+    return [_row_to_eval_run(r) for r in rows]
+
+
+async def claim_eval_run(conn: aiosqlite.Connection, run_id: str) -> bool:
+    """Atomically flip a queued eval run to 'running'. Returns False if it
+    was already taken or cancelled."""
+    now = utcnow_iso()
+    cur = await conn.execute(
+        "UPDATE eval_runs SET status = 'running', started_at = ? "
+        "WHERE id = ? AND status = 'queued'",
+        (now, run_id),
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def update_eval_run_progress(
+    conn: aiosqlite.Connection,
+    run_id: str,
+    *,
+    gpu_ids: list[int] | None = None,
+    log_path: str | None = None,
+    pid: int | None = None,
+    sample_count: int | None = None,
+) -> None:
+    fields: list[str] = []
+    args: list[Any] = []
+    if gpu_ids is not None:
+        fields.append("gpu_ids = ?")
+        args.append(json.dumps(gpu_ids))
+    if log_path is not None:
+        fields.append("log_path = ?")
+        args.append(log_path)
+    if pid is not None:
+        fields.append("pid = ?")
+        args.append(pid)
+    if sample_count is not None:
+        fields.append("sample_count = ?")
+        args.append(sample_count)
+    if not fields:
+        return
+    args.append(run_id)
+    await conn.execute(
+        f"UPDATE eval_runs SET {', '.join(fields)} WHERE id = ?", args
+    )
+    await conn.commit()
+
+
+async def finalize_eval_run(
+    conn: aiosqlite.Connection,
+    run_id: str,
+    *,
+    status: EvalRunStatus,
+    aggregate: dict[str, MetricAggregate] | None = None,
+    sample_count: int | None = None,
+    error: str | None = None,
+) -> None:
+    aggregate_json = (
+        json.dumps({k: v.model_dump() for k, v in aggregate.items()})
+        if aggregate is not None
+        else None
+    )
+    await conn.execute(
+        "UPDATE eval_runs SET status = ?, finished_at = ?, aggregate_json = ?, "
+        "sample_count = COALESCE(?, sample_count), error = ? WHERE id = ?",
+        (
+            status.value,
+            utcnow_iso(),
+            aggregate_json,
+            sample_count,
+            error,
+            run_id,
+        ),
+    )
+    await conn.commit()
+
+
+async def request_cancel_eval_run(
+    conn: aiosqlite.Connection, run_id: str
+) -> str:
+    """Mark a queued eval run cancelled; signal caller for running cases.
+
+    Mirrors ``request_cancel`` for experiments.
+    """
+    cur = await conn.execute("SELECT status FROM eval_runs WHERE id = ?", (run_id,))
+    row = await cur.fetchone()
+    if not row:
+        return "not_found"
+    status = row[0]
+    if status == EvalRunStatus.QUEUED.value:
+        now = utcnow_iso()
+        await conn.execute(
+            "UPDATE eval_runs SET status = 'cancelled', finished_at = ? "
+            "WHERE id = ? AND status = 'queued'",
+            (now, run_id),
+        )
+        await conn.commit()
+        return "cancelled"
+    if status == EvalRunStatus.RUNNING.value:
+        return "running"
+    return status
+
+
+def _row_to_eval_result(row: aiosqlite.Row) -> EvalResult:
+    return EvalResult(
+        id=row["id"],
+        run_id=row["run_id"],
+        sample_index=row["sample_index"],
+        input=json.loads(row["input_json"]),
+        prediction=row["prediction"],
+        gold=json.loads(row["gold_json"]) if row["gold_json"] else None,
+        scores=json.loads(row["scores_json"]),
+        error=row["error"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+async def add_eval_result(
+    conn: aiosqlite.Connection,
+    *,
+    run_id: str,
+    sample_index: int,
+    input: dict[str, Any],
+    prediction: str,
+    gold: dict[str, Any] | None,
+    scores: dict[str, float],
+    error: str | None = None,
+) -> int:
+    cur = await conn.execute(
+        "INSERT INTO eval_results (run_id, sample_index, input_json, prediction, "
+        "gold_json, scores_json, error, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            sample_index,
+            json.dumps(input),
+            prediction,
+            json.dumps(gold) if gold is not None else None,
+            json.dumps(scores),
+            error,
+            utcnow_iso(),
+        ),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def list_eval_results(
+    conn: aiosqlite.Connection,
+    run_id: str,
+    *,
+    limit: int = 500,
+    offset: int = 0,
+) -> list[EvalResult]:
+    cur = await conn.execute(
+        "SELECT * FROM eval_results WHERE run_id = ? "
+        "ORDER BY sample_index LIMIT ? OFFSET ?",
+        (run_id, limit, offset),
+    )
+    rows = await cur.fetchall()
+    return [_row_to_eval_result(r) for r in rows]
+
+
+async def count_eval_results(conn: aiosqlite.Connection, run_id: str) -> int:
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM eval_results WHERE run_id = ?", (run_id,)
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def recover_eval_runs(conn: aiosqlite.Connection) -> int:
+    """Requeue 'running' eval runs on scheduler start (crash recovery).
+
+    Mirrors the experiment recovery in scheduler.start(). Returns the
+    number of rows touched.
+    """
+    now = utcnow_iso()
+    cur = await conn.execute(
+        "UPDATE eval_runs SET status = 'queued', started_at = NULL, "
+        "gpu_ids = NULL, log_path = NULL, pid = NULL WHERE status = 'running'",
+        (),
+    )
+    # Restore queued_at-equivalent by stamping created_at? No — eval_runs has
+    # only created_at, which is immutable. The status flip is enough; the
+    # eval driver re-claims in FIFO via created_at.
+    await conn.commit()
+    _ = now  # reserved for future started_at history table
+    return cur.rowcount

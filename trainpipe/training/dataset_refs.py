@@ -6,7 +6,7 @@ don't need DB access. Sub-sample suffixes (``#500``) are preserved.
 """
 
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 import aiosqlite
 
@@ -45,20 +45,27 @@ async def _resolve_list(
 ) -> list[str]:
     out: list[str] = []
     for raw in items:
-        parsed = parse_ref(raw)
-        if parsed is None:
-            if raw.startswith("ds:"):
-                # Looked like a ref but didn't match — better to reject
-                # than to pass garbage through to ms-swift.
-                raise MalformedDatasetRef(raw)
-            out.append(raw)
-            continue
-        ds_id, suffix = parsed
-        rec = await repository.get_dataset(conn, ds_id)
-        if rec is None:
-            raise UnknownDatasetRef(ds_id)
-        out.append(f"{rec.path}{suffix}")
+        out.append(await resolve_single(raw, conn))
     return out
+
+
+async def resolve_single(raw: str, conn: aiosqlite.Connection) -> str:
+    """Resolve a single ``ds:<id>(#suffix)?`` ref to its filesystem path.
+
+    Non-ref strings (anything that doesn't start with ``ds:``) are passed
+    through unchanged. ``ds:``-prefixed strings that don't match the ref
+    grammar raise :class:`MalformedDatasetRef`.
+    """
+    parsed = parse_ref(raw)
+    if parsed is None:
+        if raw.startswith("ds:"):
+            raise MalformedDatasetRef(raw)
+        return raw
+    ds_id, suffix = parsed
+    rec = await repository.get_dataset(conn, ds_id)
+    if rec is None:
+        raise UnknownDatasetRef(ds_id)
+    return f"{rec.path}{suffix}"
 
 
 async def resolve_spec(

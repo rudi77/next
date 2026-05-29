@@ -8,10 +8,11 @@ from fastapi.responses import FileResponse
 
 from ..autoresearch.manager import StudyManager
 from ..core.db import Database
+from ..evals.dispatcher import EvalDispatcher
 from ..scheduler.gpu_pool import GpuPool, detect_gpus
 from ..scheduler.loop import Scheduler
 from ..settings import settings
-from .routes import datasets, experiments, gpus, studies
+from .routes import datasets, evals, experiments, gpus, studies
 
 _UI_INDEX = Path(__file__).resolve().parent.parent / "ui" / "index.html"
 
@@ -55,14 +56,19 @@ async def lifespan(app: FastAPI):
     study_manager = StudyManager(db)
     await study_manager.start_existing()
 
+    eval_dispatcher = EvalDispatcher(db, gpu_pool)
+    await eval_dispatcher.start()
+
     app.state.db = db
     app.state.gpu_pool = gpu_pool
     app.state.scheduler = scheduler
     app.state.study_manager = study_manager
+    app.state.eval_dispatcher = eval_dispatcher
 
     try:
         yield
     finally:
+        await eval_dispatcher.stop()
         await study_manager.stop_all()
         await scheduler.stop()
 
@@ -90,3 +96,4 @@ app.include_router(experiments.router)
 app.include_router(gpus.router)
 app.include_router(studies.router)
 app.include_router(datasets.router)
+app.include_router(evals.router)
