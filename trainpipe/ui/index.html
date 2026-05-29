@@ -27,26 +27,26 @@
 
   <!-- ── Top bar ───────────────────────────────────────────────────── -->
   <header class="bg-slate-900 text-white shadow">
-    <div class="max-w-screen-xl mx-auto px-4 py-3 flex items-center gap-4">
-      <h1 class="text-xl font-semibold">trainpipe</h1>
-      <span class="text-xs text-slate-400" x-text="baseUrl"></span>
+    <div class="max-w-screen-xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center gap-2 sm:gap-4">
+      <h1 class="text-lg sm:text-xl font-semibold">trainpipe</h1>
+      <span class="hidden md:inline text-xs text-slate-400" x-text="baseUrl"></span>
       <div class="flex-1"></div>
       <a x-show="mlflowUrl" :href="mlflowUrl" target="_blank"
          class="text-sm text-cyan-300 hover:text-cyan-100 underline">MLflow ↗</a>
-      <button @click="apiKeyOpen = true" class="text-sm bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded">
-        <template x-if="apiKey"><span>🔑 Key set</span></template>
-        <template x-if="!apiKey"><span class="text-amber-300">🔑 Set API key</span></template>
+      <button @click="apiKeyOpen = true" class="text-sm bg-slate-700 hover:bg-slate-600 px-3 py-2 sm:py-1 rounded">
+        <template x-if="apiKey"><span><span class="hidden sm:inline">🔑 Key set</span><span class="sm:hidden">🔑✓</span></span></template>
+        <template x-if="!apiKey"><span class="text-amber-300"><span class="hidden sm:inline">🔑 Set API key</span><span class="sm:hidden">🔑 !</span></span></template>
       </button>
-      <span class="w-2 h-2 rounded-full"
+      <span class="w-2.5 h-2.5 rounded-full" :title="health"
             :class="health === 'ok' ? 'bg-emerald-400' : 'bg-rose-500'"></span>
     </div>
 
-    <!-- Tabs -->
-    <nav class="max-w-screen-xl mx-auto px-4 pb-0 flex gap-1">
-      <template x-for="t in ['experiments','studies','datasets','gpus']" :key="t">
+    <!-- Tabs (scroll-x on narrow phones) -->
+    <nav class="max-w-screen-xl mx-auto px-2 sm:px-4 pb-0 flex gap-1 overflow-x-auto scrollbar-thin">
+      <template x-for="t in ['experiments','studies','evals','datasets','gpus']" :key="t">
         <button @click="tab = t"
                 :class="tab === t ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'"
-                class="px-4 py-2 rounded-t text-sm capitalize">
+                class="shrink-0 px-3 sm:px-4 py-2.5 sm:py-2 rounded-t text-sm capitalize">
           <span x-text="t"></span>
         </button>
       </template>
@@ -54,67 +54,71 @@
   </header>
 
   <!-- ── API key modal ─────────────────────────────────────────────── -->
-  <div x-show="apiKeyOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-40"
+  <div x-show="apiKeyOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-40 p-2 sm:p-4"
        @click.self="apiKeyOpen = false">
-    <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+    <div class="bg-white rounded-lg shadow-xl p-5 sm:p-6 w-full max-w-sm">
       <h3 class="font-semibold mb-2">API key</h3>
       <p class="text-sm text-slate-600 mb-3">Stored in your browser only.</p>
       <input type="password" x-model="apiKeyDraft" placeholder="X-API-Key"
-             class="w-full border rounded px-3 py-2 text-sm" />
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+             class="w-full border rounded px-3 py-2.5 text-base sm:text-sm" />
       <div class="mt-4 flex justify-end gap-2">
-        <button @click="apiKeyOpen = false" class="px-3 py-1 rounded text-sm">Cancel</button>
-        <button @click="saveApiKey()" class="px-3 py-1 rounded text-sm bg-slate-900 text-white">Save</button>
+        <button @click="apiKeyOpen = false" class="px-4 py-2 rounded text-sm">Cancel</button>
+        <button @click="saveApiKey()" class="px-4 py-2 rounded text-sm bg-slate-900 text-white">Save</button>
       </div>
     </div>
   </div>
 
-  <main class="max-w-screen-xl mx-auto px-4 py-6">
+  <main class="max-w-screen-xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
 
     <!-- ── Experiments tab ─────────────────────────────────────────── -->
     <section x-show="tab === 'experiments'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Experiments</h2>
-        <button @click="openSubmitExp()" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">
+        <button @click="openSubmitExp()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
           + Submit
         </button>
       </div>
 
-      <div class="bg-white rounded-lg shadow overflow-hidden">
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 text-slate-600 text-left">
             <tr>
               <th class="px-3 py-2">Name</th>
               <th class="px-3 py-2">Status</th>
-              <th class="px-3 py-2">Model</th>
-              <th class="px-3 py-2">GPUs</th>
-              <th class="px-3 py-2">Created</th>
-              <th></th>
+              <th class="px-3 py-2 hidden md:table-cell">Model</th>
+              <th class="px-3 py-2 hidden sm:table-cell">GPUs</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Created</th>
             </tr>
           </thead>
           <tbody>
             <template x-for="e in experiments" :key="e.id">
               <tr class="border-t hover:bg-slate-50 cursor-pointer" @click="openDetail(e.id)">
                 <td class="px-3 py-2 font-medium">
-                  <span x-text="e.spec.name || '(unnamed)'"></span>
-                  <span class="text-slate-400 text-xs ml-1" x-text="e.id.slice(0,8)"></span>
+                  <div class="flex flex-col">
+                    <div class="flex items-center gap-2">
+                      <span x-text="e.spec.name || '(unnamed)'"></span>
+                      <a x-show="e.mlflow_run_id && mlflowUrl"
+                         :href="mlflowRunUrl(e)"
+                         target="_blank" @click.stop=""
+                         class="text-cyan-700 hover:text-cyan-900 text-xs"
+                         title="Open in MLflow">↗</a>
+                    </div>
+                    <span class="text-slate-400 text-xs md:hidden" x-text="e.spec.model"></span>
+                    <span class="text-slate-400 text-xs hidden md:inline" x-text="e.id.slice(0,8)"></span>
+                  </div>
                 </td>
                 <td class="px-3 py-2">
                   <span class="badge inline-flex px-2 py-0.5 rounded text-xs font-medium"
                         :class="statusColor(e.status)" x-text="e.status"></span>
                 </td>
-                <td class="px-3 py-2 text-slate-600" x-text="e.spec.model"></td>
-                <td class="px-3 py-2 text-slate-600" x-text="(e.gpu_ids||[]).join(',') || '—'"></td>
-                <td class="px-3 py-2 text-slate-500 text-xs" x-text="fmtTime(e.created_at)"></td>
-                <td class="px-3 py-2 text-right">
-                  <a x-show="e.mlflow_run_id && mlflowUrl"
-                     :href="mlflowUrl + '/#/experiments/' + (e.mlflow_experiment_id||0) + '/runs/' + e.mlflow_run_id"
-                     target="_blank" @click.stop=""
-                     class="text-cyan-700 hover:underline text-xs">MLflow ↗</a>
-                </td>
+                <td class="px-3 py-2 text-slate-600 hidden md:table-cell" x-text="e.spec.model"></td>
+                <td class="px-3 py-2 text-slate-600 hidden sm:table-cell" x-text="(e.gpu_ids||[]).join(',') || '—'"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(e.created_at)"></td>
               </tr>
             </template>
             <tr x-show="experiments.length === 0">
-              <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
+              <td colspan="5" class="px-3 py-8 text-center text-slate-400 text-sm">
                 No experiments yet. Submit one to get started.
               </td>
             </tr>
@@ -127,20 +131,20 @@
     <section x-show="tab === 'studies'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Studies</h2>
-        <button @click="openSubmitStudy()" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">
+        <button @click="openSubmitStudy()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
           + Sweep
         </button>
       </div>
 
-      <div class="bg-white rounded-lg shadow overflow-hidden">
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 text-slate-600 text-left">
             <tr>
               <th class="px-3 py-2">Name</th>
               <th class="px-3 py-2">Status</th>
               <th class="px-3 py-2">Progress</th>
-              <th class="px-3 py-2">Best</th>
-              <th class="px-3 py-2">Created</th>
+              <th class="px-3 py-2 hidden sm:table-cell">Best</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Created</th>
               <th></th>
             </tr>
           </thead>
@@ -148,24 +152,27 @@
             <template x-for="s in studies" :key="s.id">
               <tr class="border-t hover:bg-slate-50">
                 <td class="px-3 py-2 font-medium">
-                  <span x-text="s.name"></span>
-                  <span class="text-slate-400 text-xs ml-1" x-text="s.id.slice(0,8)"></span>
+                  <div class="flex flex-col">
+                    <span x-text="s.name"></span>
+                    <span class="text-slate-400 text-xs sm:hidden font-mono"
+                          x-text="'best: ' + (s.best_value?.toFixed(4) ?? '—')"></span>
+                  </div>
                 </td>
                 <td class="px-3 py-2">
                   <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
                         :class="statusColor(s.status)" x-text="s.status"></span>
                 </td>
-                <td class="px-3 py-2 text-slate-600">
+                <td class="px-3 py-2 text-slate-600 whitespace-nowrap">
                   <span x-text="s.n_trials_completed"></span>
                   <span class="text-slate-400">/</span>
                   <span x-text="s.n_trials_target ?? '∞'"></span>
                 </td>
-                <td class="px-3 py-2 font-mono text-xs" x-text="s.best_value?.toFixed(4) ?? '—'"></td>
-                <td class="px-3 py-2 text-slate-500 text-xs" x-text="fmtTime(s.created_at)"></td>
+                <td class="px-3 py-2 font-mono text-xs hidden sm:table-cell" x-text="s.best_value?.toFixed(4) ?? '—'"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(s.created_at)"></td>
                 <td class="px-3 py-2 text-right">
                   <button x-show="s.status === 'active'"
                           @click="cancelStudy(s.id)"
-                          class="text-rose-600 hover:underline text-xs">Cancel</button>
+                          class="text-rose-600 hover:underline text-sm sm:text-xs px-2 py-1">Cancel</button>
                 </td>
               </tr>
             </template>
@@ -183,46 +190,167 @@
     <section x-show="tab === 'datasets'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Datasets</h2>
-        <button @click="openUploadDataset()" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">
+        <button @click="openUploadDataset()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
           + Upload
         </button>
       </div>
 
-      <div class="bg-white rounded-lg shadow overflow-hidden">
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 text-slate-600 text-left">
             <tr>
               <th class="px-3 py-2">Name</th>
               <th class="px-3 py-2">Ref</th>
-              <th class="px-3 py-2">Format</th>
-              <th class="px-3 py-2">Rows</th>
-              <th class="px-3 py-2">Size</th>
+              <th class="px-3 py-2 hidden sm:table-cell">Format</th>
+              <th class="px-3 py-2 hidden md:table-cell">Rows</th>
+              <th class="px-3 py-2 hidden md:table-cell">Size</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             <template x-for="d in datasets" :key="d.id">
               <tr class="border-t hover:bg-slate-50">
-                <td class="px-3 py-2 font-medium" x-text="d.name"></td>
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex flex-col">
+                    <span x-text="d.name"></span>
+                    <span class="text-slate-400 text-xs md:hidden"
+                          x-text="d.format + ' · ' + (d.line_count ?? '—') + ' rows · ' + fmtBytes(d.size_bytes)"></span>
+                  </div>
+                </td>
                 <td class="px-3 py-2">
-                  <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs cursor-pointer"
+                  <code class="bg-slate-100 px-1.5 py-1 rounded text-xs cursor-pointer inline-block"
                         @click="copy('ds:' + d.id)"
                         :title="'Click to copy ds:' + d.id">
                     ds:<span x-text="d.id.slice(0,8)"></span>…
                   </code>
                 </td>
-                <td class="px-3 py-2 text-slate-600" x-text="d.format"></td>
-                <td class="px-3 py-2 text-slate-600" x-text="d.line_count ?? '—'"></td>
-                <td class="px-3 py-2 text-slate-600 text-xs" x-text="fmtBytes(d.size_bytes)"></td>
-                <td class="px-3 py-2 text-right space-x-2">
-                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline text-xs">Preview</button>
-                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline text-xs">Delete</button>
+                <td class="px-3 py-2 text-slate-600 hidden sm:table-cell" x-text="d.format"></td>
+                <td class="px-3 py-2 text-slate-600 hidden md:table-cell" x-text="d.line_count ?? '—'"></td>
+                <td class="px-3 py-2 text-slate-600 text-xs hidden md:table-cell" x-text="fmtBytes(d.size_bytes)"></td>
+                <td class="px-3 py-2 text-right whitespace-nowrap">
+                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline text-sm sm:text-xs px-2 py-1">Preview</button>
+                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline text-sm sm:text-xs px-2 py-1">Delete</button>
                 </td>
               </tr>
             </template>
             <tr x-show="datasets.length === 0">
               <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
                 No datasets uploaded yet. Click + Upload to add a JSONL / CSV / Parquet file.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Evals tab ──────────────────────────────────────────────── -->
+    <section x-show="tab === 'evals'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Eval suites</h2>
+        <button @click="openCreateSuite()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
+          + Suite
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg shadow overflow-x-auto mb-6">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Dataset</th>
+              <th class="px-3 py-2">Metrics</th>
+              <th class="px-3 py-2 hidden md:table-cell">Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="s in evalSuites" :key="s.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex flex-col">
+                    <span x-text="s.name"></span>
+                    <span class="text-slate-400 text-xs font-mono truncate max-w-[60vw] lg:hidden"
+                          x-text="s.dataset_path"></span>
+                  </div>
+                </td>
+                <td class="px-3 py-2 text-xs font-mono text-slate-600 hidden lg:table-cell" x-text="s.dataset_path"></td>
+                <td class="px-3 py-2 text-slate-600 text-xs">
+                  <template x-for="m in s.metrics" :key="m.kind + (m.name||'')">
+                    <span class="inline-block bg-slate-100 rounded px-1.5 py-0.5 mr-1 mb-0.5" x-text="m.name || m.kind"></span>
+                  </template>
+                </td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden md:table-cell" x-text="fmtTime(s.created_at)"></td>
+                <td class="px-3 py-2 text-right">
+                  <button @click="deleteSuite(s)" class="text-rose-600 hover:underline text-sm sm:text-xs px-2 py-1">Delete</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="evalSuites.length === 0">
+              <td colspan="5" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No eval suites yet. Click + Suite to create one.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Eval runs</h2>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500"
+                x-text="selectedRunIds.length + ' selected'"></span>
+          <button @click="compareSelected()"
+                  :disabled="selectedRunIds.length < 2"
+                  class="bg-slate-900 text-white text-sm px-3 py-2 rounded disabled:opacity-50">
+            Compare
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-2 py-2 w-10"></th>
+              <th class="px-3 py-2">Model</th>
+              <th class="px-3 py-2 hidden md:table-cell">Suite</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Samples</th>
+              <th class="px-3 py-2">Aggregate</th>
+              <th class="px-3 py-2 hidden md:table-cell">Trigger</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in evalRuns" :key="r.id">
+              <tr class="border-t hover:bg-slate-50 cursor-pointer" @click="openRunDetail(r.id)">
+                <td class="px-2 py-3 sm:py-2" @click.stop>
+                  <input type="checkbox" class="w-4 h-4"
+                         :checked="selectedRunIds.includes(r.id)"
+                         @change="toggleSelectRun(r.id)" />
+                </td>
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex flex-col">
+                    <span x-text="r.model_ref"></span>
+                    <span class="text-slate-400 text-xs md:hidden"
+                          x-text="suiteName(r.suite_id) + ' · ' + r.triggered_by"></span>
+                  </div>
+                </td>
+                <td class="px-3 py-2 text-xs text-slate-600 hidden md:table-cell"
+                    x-text="suiteName(r.suite_id)"></td>
+                <td class="px-3 py-2">
+                  <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                        :class="statusColor(r.status)" x-text="r.status"></span>
+                </td>
+                <td class="px-3 py-2 text-slate-600 hidden lg:table-cell" x-text="r.sample_count ?? '—'"></td>
+                <td class="px-3 py-2 text-xs font-mono" x-text="aggregateSummary(r)"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden md:table-cell" x-text="r.triggered_by"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(r.created_at)"></td>
+              </tr>
+            </template>
+            <tr x-show="evalRuns.length === 0">
+              <td colspan="8" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No eval runs yet. Trigger one from an experiment's auto_eval or via the API.
               </td>
             </tr>
           </tbody>
@@ -265,32 +393,32 @@
   </main>
 
   <!-- ── Submit experiment modal ─────────────────────────────────── -->
-  <div x-show="submitExpOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+  <div x-show="submitExpOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
        @click.self="submitExpOpen = false">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-      <div class="px-5 py-3 border-b flex justify-between items-center">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
         <h3 class="font-semibold">Submit experiment</h3>
-        <button @click="submitExpOpen = false">✕</button>
+        <button @click="submitExpOpen = false" class="text-2xl leading-none px-2">✕</button>
       </div>
-      <div class="p-5 space-y-3">
-        <div class="grid grid-cols-2 gap-3">
+      <div class="p-4 sm:p-5 space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label class="text-xs text-slate-600 block">name</label>
-            <input x-model="expDraft.name" class="w-full border rounded px-2 py-1.5 text-sm" />
+            <input x-model="expDraft.name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
           </div>
           <div>
             <label class="text-xs text-slate-600 block">gpu_count</label>
             <input type="number" min="1" x-model.number="expDraft.gpu_count"
-                   class="w-full border rounded px-2 py-1.5 text-sm" />
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
           </div>
         </div>
         <div>
           <label class="text-xs text-slate-600 block">model</label>
-          <input x-model="expDraft.model" class="w-full border rounded px-2 py-1.5 text-sm" />
+          <input x-model="expDraft.model" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
         </div>
         <div>
           <label class="text-xs text-slate-600 block">sft_type</label>
-          <select x-model="expDraft.sft_type" class="w-full border rounded px-2 py-1.5 text-sm">
+          <select x-model="expDraft.sft_type" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
             <option>lora</option><option>full</option><option>qlora</option>
             <option>longlora</option><option>adalora</option><option>ia3</option>
           </select>
@@ -300,12 +428,12 @@
             dataset <span class="text-slate-400">(one per line — HF id, /abs/path, or ds:&lt;id&gt;)</span>
           </label>
           <textarea x-model="expDraft.dataset" rows="3"
-                    class="w-full border rounded px-2 py-1.5 text-sm font-mono"
+                    class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono"
                     placeholder="AI-ModelScope/alpaca-gpt4-data-en#100"></textarea>
           <div class="text-xs text-slate-500 mt-1" x-show="datasets.length > 0">
             Available uploads:
             <template x-for="d in datasets" :key="d.id">
-              <button class="mr-2 underline text-cyan-700"
+              <button class="mr-2 underline text-cyan-700 py-1"
                       @click="appendDataset('ds:' + d.id)"
                       x-text="d.name + ' (ds:' + d.id.slice(0,6) + '…)'"></button>
             </template>
@@ -314,20 +442,20 @@
         <div>
           <label class="text-xs text-slate-600 block">val_dataset (optional, one per line)</label>
           <textarea x-model="expDraft.val_dataset" rows="2"
-                    class="w-full border rounded px-2 py-1.5 text-sm font-mono"></textarea>
+                    class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono"></textarea>
         </div>
         <div>
           <label class="text-xs text-slate-600 block">hyperparameters (JSON)</label>
           <textarea x-model="expDraft.hyperparameters" rows="6"
-                    class="w-full border rounded px-2 py-1.5 text-sm font-mono"></textarea>
+                    class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono"></textarea>
         </div>
         <div x-show="expError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
              x-text="expError"></div>
       </div>
-      <div class="px-5 py-3 border-t flex justify-end gap-2">
-        <button @click="submitExpOpen = false" class="px-3 py-1.5 text-sm">Cancel</button>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="submitExpOpen = false" class="px-4 py-2 text-sm">Cancel</button>
         <button @click="submitExp()" :disabled="submitting"
-                class="px-3 py-1.5 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
           <span x-show="!submitting">Submit</span>
           <span x-show="submitting">Submitting…</span>
         </button>
@@ -336,24 +464,24 @@
   </div>
 
   <!-- ── Submit study modal ────────────────────────────────────────── -->
-  <div x-show="submitStudyOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+  <div x-show="submitStudyOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
        @click.self="submitStudyOpen = false">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-      <div class="px-5 py-3 border-b flex justify-between items-center">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
         <h3 class="font-semibold">Start sweep</h3>
-        <button @click="submitStudyOpen = false">✕</button>
+        <button @click="submitStudyOpen = false" class="text-2xl leading-none px-2">✕</button>
       </div>
-      <div class="p-5 space-y-3">
+      <div class="p-4 sm:p-5 space-y-3">
         <p class="text-sm text-slate-600">Edit a full StudyConfig JSON.</p>
         <textarea x-model="studyDraft" rows="22"
-                  class="w-full border rounded px-2 py-1.5 text-xs font-mono"></textarea>
+                  class="w-full border rounded px-2 py-2 text-xs font-mono"></textarea>
         <div x-show="studyError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
              x-text="studyError"></div>
       </div>
-      <div class="px-5 py-3 border-t flex justify-end gap-2">
-        <button @click="submitStudyOpen = false" class="px-3 py-1.5 text-sm">Cancel</button>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="submitStudyOpen = false" class="px-4 py-2 text-sm">Cancel</button>
         <button @click="submitStudy()" :disabled="submitting"
-                class="px-3 py-1.5 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
           Start sweep
         </button>
       </div>
@@ -361,34 +489,34 @@
   </div>
 
   <!-- ── Upload dataset modal ──────────────────────────────────────── -->
-  <div x-show="uploadOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+  <div x-show="uploadOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
        @click.self="uploadOpen = false">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
-      <div class="px-5 py-3 border-b flex justify-between items-center">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
         <h3 class="font-semibold">Upload dataset</h3>
-        <button @click="uploadOpen = false">✕</button>
+        <button @click="uploadOpen = false" class="text-2xl leading-none px-2">✕</button>
       </div>
-      <div class="p-5 space-y-3">
+      <div class="p-4 sm:p-5 space-y-3">
         <div>
           <label class="text-xs text-slate-600 block">name</label>
-          <input x-model="uploadDraft.name" class="w-full border rounded px-2 py-1.5 text-sm" />
+          <input x-model="uploadDraft.name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
         </div>
         <div>
           <label class="text-xs text-slate-600 block">description (optional)</label>
-          <input x-model="uploadDraft.description" class="w-full border rounded px-2 py-1.5 text-sm" />
+          <input x-model="uploadDraft.description" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
         </div>
         <div>
           <label class="text-xs text-slate-600 block">file (.jsonl / .json / .csv / .tsv / .parquet)</label>
           <input type="file" @change="uploadDraft.file = $event.target.files[0]"
-                 class="w-full text-sm" />
+                 class="w-full text-base sm:text-sm py-2" />
         </div>
         <div x-show="uploadError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
              x-text="uploadError"></div>
       </div>
-      <div class="px-5 py-3 border-t flex justify-end gap-2">
-        <button @click="uploadOpen = false" class="px-3 py-1.5 text-sm">Cancel</button>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="uploadOpen = false" class="px-4 py-2 text-sm">Cancel</button>
         <button @click="submitUpload()" :disabled="submitting"
-                class="px-3 py-1.5 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
           Upload
         </button>
       </div>
@@ -396,30 +524,30 @@
   </div>
 
   <!-- ── Experiment detail modal ───────────────────────────────────── -->
-  <div x-show="detail" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+  <div x-show="detail" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
        @click.self="closeDetail()">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-      <div class="px-5 py-3 border-b flex justify-between items-center">
-        <div>
-          <h3 class="font-semibold" x-text="detail?.spec?.name || '(unnamed)'"></h3>
-          <p class="text-xs text-slate-500 font-mono" x-text="detail?.id"></p>
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[95vh] sm:max-h-[90vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center gap-2">
+        <div class="min-w-0 flex-1">
+          <h3 class="font-semibold truncate" x-text="detail?.spec?.name || '(unnamed)'"></h3>
+          <p class="text-xs text-slate-500 font-mono truncate" x-text="detail?.id"></p>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 sm:gap-3 shrink-0">
           <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
                 :class="statusColor(detail?.status)" x-text="detail?.status"></span>
           <button x-show="detail && (detail.status === 'queued' || detail.status === 'running')"
                   @click="cancelExp(detail.id)"
                   class="text-rose-600 hover:underline text-sm">Cancel</button>
           <a x-show="detail?.mlflow_run_id && mlflowUrl"
-             :href="mlflowUrl + '/#/experiments/' + (detail.mlflow_experiment_id||0) + '/runs/' + detail.mlflow_run_id"
+             :href="mlflowRunUrl(detail)"
              target="_blank" class="text-cyan-700 hover:underline text-sm">MLflow ↗</a>
-          <button @click="closeDetail()" class="text-slate-400">✕</button>
+          <button @click="closeDetail()" class="text-slate-400 text-2xl leading-none px-2">✕</button>
         </div>
       </div>
-      <div class="p-5 grid grid-cols-2 gap-4 text-sm">
+      <div class="p-4 sm:p-5 grid grid-cols-2 sm:grid-cols-2 gap-3 sm:gap-4 text-sm">
         <div>
           <div class="text-xs text-slate-500">model</div>
-          <div class="font-mono" x-text="detail?.spec?.model"></div>
+          <div class="font-mono text-xs sm:text-sm break-all" x-text="detail?.spec?.model"></div>
         </div>
         <div>
           <div class="text-xs text-slate-500">sft_type</div>
@@ -435,7 +563,7 @@
         </div>
         <div class="col-span-2">
           <div class="text-xs text-slate-500">dataset</div>
-          <div class="font-mono text-xs">
+          <div class="font-mono text-xs break-all">
             <template x-for="d in (detail?.spec?.dataset||[])" :key="d">
               <div x-text="d"></div>
             </template>
@@ -443,13 +571,218 @@
         </div>
         <div x-show="detail?.error" class="col-span-2">
           <div class="text-xs text-slate-500">error</div>
-          <div class="font-mono text-xs text-rose-700" x-text="detail?.error"></div>
+          <div class="font-mono text-xs text-rose-700 break-all" x-text="detail?.error"></div>
         </div>
       </div>
-      <div class="flex-1 px-5 pb-5 overflow-hidden flex flex-col min-h-0">
+      <div class="flex-1 px-4 sm:px-5 pb-4 sm:pb-5 overflow-hidden flex flex-col min-h-0">
         <div class="text-xs text-slate-500 mb-1">log</div>
         <div class="log-pane flex-1 rounded p-3 overflow-y-auto scrollbar-thin" x-ref="logPane"
              x-text="detailLog || '(no log yet)'"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Create suite modal ───────────────────────────────────────── -->
+  <div x-show="createSuiteOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="createSuiteOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Create eval suite</h3>
+        <button @click="createSuiteOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3">
+        <p class="text-sm text-slate-600">Edit the EvalSuiteSpec JSON.
+          <code>dataset</code> can be an absolute path or <code>ds:&lt;id&gt;</code>.</p>
+        <textarea x-model="suiteDraft" rows="20"
+                  class="w-full border rounded px-2 py-2 text-xs font-mono"></textarea>
+        <div x-show="suiteError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="suiteError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="createSuiteOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitSuite()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          Create
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Eval run detail modal ────────────────────────────────────── -->
+  <div x-show="runDetail" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="closeRunDetail()">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[95vh] sm:max-h-[90vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center gap-2">
+        <div class="min-w-0 flex-1">
+          <h3 class="font-semibold truncate" x-text="runDetail?.model_ref"></h3>
+          <p class="text-xs text-slate-500 font-mono truncate" x-text="runDetail?.id"></p>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+          <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                :class="statusColor(runDetail?.status)" x-text="runDetail?.status"></span>
+          <button x-show="runDetail && (runDetail.status==='queued' || runDetail.status==='running')"
+                  @click="cancelRun(runDetail.id)"
+                  class="text-rose-600 hover:underline text-sm">Cancel</button>
+          <button @click="closeRunDetail()" class="text-slate-400 text-2xl leading-none px-2">✕</button>
+        </div>
+      </div>
+      <div class="p-4 sm:p-5 grid grid-cols-2 gap-3 sm:gap-4 text-sm border-b">
+        <div>
+          <div class="text-xs text-slate-500">suite</div>
+          <div x-text="suiteName(runDetail?.suite_id)"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500">samples</div>
+          <div x-text="runDetail?.sample_count ?? '—'"></div>
+        </div>
+        <div class="col-span-2">
+          <div class="text-xs text-slate-500">aggregate</div>
+          <div class="font-mono text-xs break-words" x-text="aggregateSummary(runDetail)"></div>
+        </div>
+        <div x-show="runDetail?.error" class="col-span-2">
+          <div class="text-xs text-slate-500">error</div>
+          <div class="font-mono text-xs text-rose-700 break-all" x-text="runDetail?.error"></div>
+        </div>
+      </div>
+      <!-- Per-sample on mobile: stacked cards. Desktop: table. -->
+      <div class="flex-1 overflow-y-auto scrollbar-thin">
+        <div class="md:hidden divide-y">
+          <template x-for="r in runResults" :key="r.id">
+            <div class="p-4 space-y-2 text-sm">
+              <div class="flex justify-between items-baseline">
+                <span class="text-slate-500 text-xs">sample #<span x-text="r.sample_index"></span></span>
+                <span class="font-mono text-xs" x-text="JSON.stringify(r.scores)"></span>
+              </div>
+              <div>
+                <div class="text-xs text-slate-500">prediction</div>
+                <div class="font-mono text-xs whitespace-pre-wrap break-words"
+                     x-text="r.prediction || '(empty)'"></div>
+              </div>
+              <div x-show="r.gold">
+                <div class="text-xs text-slate-500">gold</div>
+                <div class="font-mono text-xs whitespace-pre-wrap break-words"
+                     x-text="r.gold ? JSON.stringify(r.gold) : '—'"></div>
+              </div>
+            </div>
+          </template>
+          <div x-show="runResults.length === 0" class="px-3 py-8 text-center text-slate-400 text-sm">
+            No per-sample results recorded yet.
+          </div>
+        </div>
+        <table class="hidden md:table w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left sticky top-0">
+            <tr>
+              <th class="px-3 py-2">#</th>
+              <th class="px-3 py-2">Prediction</th>
+              <th class="px-3 py-2">Gold</th>
+              <th class="px-3 py-2">Scores</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in runResults" :key="r.id">
+              <tr class="border-t align-top">
+                <td class="px-3 py-2 text-slate-500" x-text="r.sample_index"></td>
+                <td class="px-3 py-2 text-xs font-mono whitespace-pre-wrap"
+                    x-text="r.prediction || '(empty)'"></td>
+                <td class="px-3 py-2 text-xs font-mono whitespace-pre-wrap"
+                    x-text="r.gold ? JSON.stringify(r.gold) : '—'"></td>
+                <td class="px-3 py-2 text-xs font-mono" x-text="JSON.stringify(r.scores)"></td>
+              </tr>
+            </template>
+            <tr x-show="runResults.length === 0">
+              <td colspan="4" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No per-sample results recorded yet.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Compare modal ────────────────────────────────────────────── -->
+  <div x-show="comparison" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="closeCompare()">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[95vh] sm:max-h-[90vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center">
+        <h3 class="font-semibold">Compare runs</h3>
+        <button @click="closeCompare()" class="text-slate-400 text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 border-b text-sm overflow-x-auto">
+        <div class="text-xs text-slate-500 mb-1">Aggregate Δ (mean per metric, per run)</div>
+        <table class="text-xs">
+          <thead>
+            <tr>
+              <th class="px-2 py-1 text-left">metric</th>
+              <template x-for="r in comparison?.runs ?? []" :key="r.id">
+                <th class="px-2 py-1 text-left" x-text="r.model_ref"></th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(byRun, mname) in (comparison?.aggregate_delta ?? {})" :key="mname">
+              <tr>
+                <td class="px-2 py-1 font-medium" x-text="mname"></td>
+                <template x-for="r in comparison?.runs ?? []" :key="r.id">
+                  <td class="px-2 py-1 font-mono"
+                      x-text="byRun[r.id] !== undefined ? byRun[r.id].toFixed(4) : '—'"></td>
+                </template>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <!-- Mobile: vertical stacked per-sample cards. Desktop: wide table. -->
+      <div class="flex-1 overflow-y-auto scrollbar-thin">
+        <div class="px-4 sm:px-5 py-2 text-xs text-slate-500 sticky top-0 bg-white border-b"
+             x-text="(comparison?.regressions ?? []).length + ' samples diverge between runs'"></div>
+        <div class="md:hidden divide-y">
+          <template x-for="s in (comparison?.regressions ?? [])" :key="s.sample_index">
+            <div class="p-4 space-y-2 text-sm">
+              <div class="text-xs text-slate-500">
+                sample #<span x-text="s.sample_index"></span>
+                <span x-show="s.gold" class="ml-2 font-mono"
+                      x-text="'gold=' + JSON.stringify(s.gold)"></span>
+              </div>
+              <template x-for="r in comparison?.runs ?? []" :key="r.id">
+                <div class="border-l-2 border-slate-200 pl-3">
+                  <div class="text-xs font-semibold" x-text="r.model_ref"></div>
+                  <div class="font-mono text-xs whitespace-pre-wrap break-words"
+                       x-text="(s.per_run[r.id] || {}).prediction || '(no row)'"></div>
+                  <div class="text-slate-500 font-mono text-xs"
+                       x-text="JSON.stringify((s.per_run[r.id] || {}).scores || {})"></div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+        <table class="hidden md:table w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">#</th>
+              <th class="px-3 py-2">Gold</th>
+              <template x-for="r in comparison?.runs ?? []" :key="r.id">
+                <th class="px-3 py-2" x-text="r.model_ref"></th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="s in (comparison?.regressions ?? [])" :key="s.sample_index">
+              <tr class="border-t align-top">
+                <td class="px-3 py-2 text-slate-500" x-text="s.sample_index"></td>
+                <td class="px-3 py-2 text-xs font-mono whitespace-pre-wrap"
+                    x-text="s.gold ? JSON.stringify(s.gold) : '—'"></td>
+                <template x-for="r in comparison?.runs ?? []" :key="r.id">
+                  <td class="px-3 py-2 text-xs font-mono whitespace-pre-wrap">
+                    <div x-text="(s.per_run[r.id] || {}).prediction || '(no row)'"></div>
+                    <div class="text-slate-500"
+                         x-text="JSON.stringify((s.per_run[r.id] || {}).scores || {})"></div>
+                  </td>
+                </template>
+              </tr>
+            </template>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -484,6 +817,16 @@ function trainpipe() {
     datasets: [],
     gpus: { total: 0, free: [], leases: [] },
 
+    evalSuites: [],
+    evalRuns: [],
+    selectedRunIds: [],
+    createSuiteOpen: false,
+    suiteDraft: '',
+    suiteError: '',
+    runDetail: null,
+    runResults: [],
+    comparison: null,
+
     submitExpOpen: false,
     expDraft: { name: '', model: 'Qwen/Qwen2.5-0.5B-Instruct', sft_type: 'lora',
                 gpu_count: 1, dataset: '', val_dataset: '',
@@ -504,7 +847,11 @@ function trainpipe() {
       this.apiKeyDraft = this.apiKey;
       try {
         const cfg = await (await fetch('/ui/config')).json();
-        this.mlflowUrl = cfg.mlflow_tracking_uri;
+        // Server reports its own tracking URI which often contains
+        // 'localhost' — but from a phone over the LAN, localhost is
+        // the phone itself, not the dev box. Rewrite to whichever host
+        // the user is currently browsing this page from.
+        this.mlflowUrl = this.rewriteLocalhost(cfg.mlflow_tracking_uri);
       } catch (e) { /* non-fatal */ }
       await this.refreshAll();
       this.pollTimer = setInterval(() => this.refreshAll(), 4000);
@@ -547,6 +894,8 @@ function trainpipe() {
         this.api('/studies').then(r => this.studies = r).catch(() => {}),
         this.api('/datasets').then(r => this.datasets = r).catch(() => {}),
         this.api('/gpus').then(r => this.gpus = r).catch(() => {}),
+        this.api('/evals/suites').then(r => this.evalSuites = r).catch(() => {}),
+        this.api('/evals/runs?limit=200').then(r => this.evalRuns = r).catch(() => {}),
       ];
       await Promise.all(tasks);
     },
@@ -720,7 +1069,122 @@ function trainpipe() {
       } catch (e) { this.flash('Delete failed: ' + e.message); }
     },
 
+    // ── evals ──────────────────────────────────────────────────
+    openCreateSuite() {
+      this.suiteError = '';
+      this.suiteDraft = JSON.stringify({
+        name: 'eval-' + new Date().toISOString().slice(0, 10),
+        description: '',
+        dataset: '/abs/path/to/eval.jsonl',
+        metrics: [
+          { kind: 'exact_match', config: { gold_field: 'gold' } },
+        ],
+        inference_params: { max_new_tokens: 256, temperature: 0.0 },
+      }, null, 2);
+      this.createSuiteOpen = true;
+    },
+    async submitSuite() {
+      this.suiteError = '';
+      let spec;
+      try { spec = JSON.parse(this.suiteDraft); }
+      catch (e) { this.suiteError = 'invalid JSON — ' + e.message; return; }
+      this.submitting = true;
+      try {
+        await this.api('/evals/suites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(spec),
+        });
+        this.createSuiteOpen = false;
+        this.flash('Suite created');
+        this.refreshAll();
+      } catch (e) { this.suiteError = e.message; }
+      finally { this.submitting = false; }
+    },
+    async deleteSuite(suite) {
+      if (!confirm(`Delete suite "${suite.name}"?`)) return;
+      try {
+        await this.api(`/evals/suites/${suite.id}`, { method: 'DELETE' });
+        this.flash('Suite deleted');
+        this.refreshAll();
+      } catch (e) {
+        if (e.message && e.message.includes('suite_in_use')) {
+          if (confirm('Suite has active runs. Delete with ?force=true (cascades)?')) {
+            try {
+              await this.api(`/evals/suites/${suite.id}?force=true`, { method: 'DELETE' });
+              this.flash('Suite force-deleted');
+              this.refreshAll();
+            } catch (e2) { this.flash('Force delete failed: ' + e2.message); }
+          }
+        } else {
+          this.flash('Delete failed: ' + e.message);
+        }
+      }
+    },
+    toggleSelectRun(id) {
+      const i = this.selectedRunIds.indexOf(id);
+      if (i === -1) this.selectedRunIds.push(id);
+      else this.selectedRunIds.splice(i, 1);
+    },
+    async compareSelected() {
+      if (this.selectedRunIds.length < 2) return;
+      try {
+        const cmp = await this.api(`/evals/compare?run_ids=${this.selectedRunIds.join(',')}`);
+        this.comparison = cmp;
+      } catch (e) { this.flash('Compare failed: ' + e.message); }
+    },
+    closeCompare() { this.comparison = null; },
+    async openRunDetail(id) {
+      try {
+        this.runDetail = await this.api(`/evals/runs/${id}`);
+        this.runResults = await this.api(`/evals/runs/${id}/results?limit=1000`);
+      } catch (e) { this.flash('Failed to load run: ' + e.message); }
+    },
+    closeRunDetail() {
+      this.runDetail = null;
+      this.runResults = [];
+    },
+    async cancelRun(id) {
+      try {
+        await this.api(`/evals/runs/${id}/cancel`, { method: 'POST' });
+        this.flash('Cancelled');
+        if (this.runDetail?.id === id) this.openRunDetail(id);
+        this.refreshAll();
+      } catch (e) { this.flash('Cancel failed: ' + e.message); }
+    },
+    suiteName(id) {
+      const s = this.evalSuites.find(s => s.id === id);
+      return s ? s.name : (id ? id.slice(0, 8) + '…' : '—');
+    },
+    aggregateSummary(run) {
+      if (!run || !run.aggregate) return '—';
+      return Object.entries(run.aggregate)
+        .map(([k, v]) => `${k}=${(v.mean ?? 0).toFixed(3)}`)
+        .join('  ');
+    },
+
     // ── helpers ────────────────────────────────────────────────
+    mlflowRunUrl(exp) {
+      if (!exp || !exp.mlflow_run_id || !this.mlflowUrl) return '#';
+      return this.mlflowUrl + '/#/experiments/' + (exp.mlflow_experiment_id || 0) + '/runs/' + exp.mlflow_run_id;
+    },
+    rewriteLocalhost(url) {
+      // If the configured URL points at localhost/127.0.0.1 and we are
+      // browsing from a different host (e.g. phone over LAN), swap the
+      // host so links resolve correctly.
+      if (!url) return url;
+      try {
+        const u = new URL(url);
+        const browserHost = window.location.hostname;
+        const isLoopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+        if (isLoopback && browserHost && browserHost !== 'localhost' && browserHost !== '127.0.0.1') {
+          u.hostname = browserHost;
+        }
+        return u.toString().replace(/\/$/, '');
+      } catch {
+        return url;
+      }
+    },
     statusColor(s) {
       return {
         queued:    'bg-slate-200 text-slate-700',
