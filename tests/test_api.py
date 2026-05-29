@@ -245,6 +245,100 @@ def test_logs_returns_file_content(state, client, tmp_path):
     assert "training-line-2" in r.text
 
 
+def test_submit_with_missing_local_path_returns_422(state, client, tmp_path):
+    missing = tmp_path / "absent.jsonl"
+    r = client.post(
+        "/experiments",
+        json={"model": "m", "dataset": [str(missing)]},
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["error"] == "missing_local_paths"
+    paths = [m["path"] for m in detail["missing"]]
+    assert str(missing) in paths
+
+
+def test_submit_with_existing_local_path_ok(state, client, tmp_path):
+    present = tmp_path / "train.jsonl"
+    present.write_text("{}\n", encoding="utf-8")
+    r = client.post(
+        "/experiments",
+        json={"model": "m", "dataset": [str(present)]},
+        headers=HEADERS,
+    )
+    assert r.status_code == 201
+
+
+def test_submit_with_remote_name_skips_validation(state, client):
+    r = client.post(
+        "/experiments",
+        json={"model": "m", "dataset": ["meta-llama/Llama-3.1-8B"]},
+        headers=HEADERS,
+    )
+    assert r.status_code == 201
+
+
+def test_batch_reports_all_missing_paths(state, client, tmp_path):
+    bad1 = str(tmp_path / "no1.jsonl")
+    bad2 = str(tmp_path / "no2.jsonl")
+    r = client.post(
+        "/experiments/batch",
+        json=[
+            {"model": "m", "dataset": [bad1]},
+            {"model": "m", "dataset": [bad2]},
+        ],
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    items = r.json()["detail"]["missing"]
+    assert {(m["spec_index"], m["path"]) for m in items} == {
+        (0, bad1),
+        (1, bad2),
+    }
+
+
+def test_val_dataset_missing_path_reported(state, client, tmp_path):
+    train = tmp_path / "train.jsonl"
+    train.write_text("{}\n", encoding="utf-8")
+    missing_val = str(tmp_path / "val-absent.jsonl")
+    r = client.post(
+        "/experiments",
+        json={
+            "model": "m",
+            "dataset": [str(train)],
+            "val_dataset": [missing_val],
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    items = r.json()["detail"]["missing"]
+    fields = {m["field"] for m in items}
+    assert fields == {"val_dataset"}
+
+
+def test_create_study_validates_base_spec_dataset(state, client, tmp_path):
+    bad = str(tmp_path / "absent.jsonl")
+    r = client.post(
+        "/studies",
+        json={
+            "name": "s",
+            "base_spec": {"model": "m", "dataset": [bad]},
+            "search_space": {
+                "hyperparameters.learning_rate": {
+                    "kind": "loguniform",
+                    "low": 1e-5,
+                    "high": 1e-2,
+                }
+            },
+            "target_metric": "eval/loss",
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["error"] == "missing_local_paths"
+
+
 def test_create_study_returns_id_from_manager(state, client):
     payload = {
         "name": "sweep-1",

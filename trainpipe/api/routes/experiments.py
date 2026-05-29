@@ -11,6 +11,7 @@ from ...core.db import Database
 from ..auth import require_api_key
 from ..deps import get_db, get_scheduler
 from ..schemas import ExperimentRecord, ExperimentSpec, ExperimentStatus
+from ..validation import enforce_dataset_paths_exist
 
 router = APIRouter(
     prefix="/experiments",
@@ -31,6 +32,7 @@ async def submit(
     spec: ExperimentSpec,
     db: Annotated[Database, Depends(get_db)],
 ) -> dict[str, str]:
+    enforce_dataset_paths_exist([spec])
     async with db.connect() as conn:
         experiment_id = await repository.create_experiment(conn, spec)
     return {"experiment_id": experiment_id}
@@ -43,6 +45,7 @@ async def submit_batch(
 ) -> dict[str, list[str]]:
     if not specs:
         raise HTTPException(422, "specs must contain at least one item")
+    enforce_dataset_paths_exist(specs)
     ids: list[str] = []
     async with db.connect() as conn:
         for s in specs:

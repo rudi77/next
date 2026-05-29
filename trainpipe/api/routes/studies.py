@@ -8,6 +8,7 @@ from ...core.db import Database
 from ..auth import require_api_key
 from ..deps import get_db, get_study_manager
 from ..schemas import StudyConfig, StudyRecord
+from ..validation import enforce_dataset_paths_exist
 
 router = APIRouter(
     prefix="/studies",
@@ -21,6 +22,7 @@ async def create_study(
     config: StudyConfig,
     manager: Annotated[StudyManager, Depends(get_study_manager)],
 ) -> dict[str, str]:
+    enforce_dataset_paths_exist([config.base_spec])
     study_id = await manager.create_and_start(config)
     return {"study_id": study_id}
 

@@ -74,6 +74,30 @@ trainpipe                           # uvicorn on :8080
 
 Health check: `curl http://localhost:8080/health`.
 
+## Datasets
+
+`dataset` and `val_dataset` accept any of:
+
+- HuggingFace repo IDs: `"meta-llama/Llama-3.1-8B"`
+- ms-swift registry shortcuts: `"AI-ModelScope/alpaca-gpt4-data-en"`
+- Local files: `"/srv/data/train.jsonl"`, `"./train.jsonl"`, `"C:/data/train.jsonl"`
+- Local directories: `"/srv/data/my-dataset/"`
+- Any of the above with a sub-sample suffix: `"/srv/data/train.jsonl#500"`
+
+Local-looking paths are validated at submit time — `POST /experiments`,
+`POST /experiments/batch`, and `POST /studies` all return **422** with a
+`missing_local_paths` detail listing every offending entry, so an agent
+can fix all of them in one round-trip. Remote refs (HF, registry) are
+accepted blindly and fail at trainer load if wrong.
+
+Expected ms-swift JSONL formats:
+
+```jsonl
+{"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+{"query": "...", "response": "..."}                                   # legacy
+{"messages": [...], "images": ["/path/to/img.jpg"]}                   # multimodal
+```
+
 ## Submitting an experiment
 
 ```bash
