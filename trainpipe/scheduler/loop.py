@@ -272,13 +272,26 @@ class Scheduler:
         mlflow_run_id: str | None,
         error: str,
     ) -> None:
-        """Cleanup when launch fails after claim: release lease, mark failed."""
+        """Cleanup when launch fails after claim: release lease, mark failed.
+
+        If an MLflow run was already created before the failure (e.g. spawn
+        error after a successful create_run), persist its id on the row so
+        callers can still find the terminated FAILED run in MLflow.
+        """
         async with self.db.connect() as conn:
-            await conn.execute(
-                "UPDATE experiments SET status = 'failed', finished_at = ?, error = ? "
-                "WHERE id = ? AND status IN ('queued', 'running')",
-                (_utcnow_iso(), error, experiment_id),
-            )
+            if mlflow_run_id is not None:
+                await conn.execute(
+                    "UPDATE experiments SET status = 'failed', finished_at = ?, "
+                    "error = ?, mlflow_run_id = ? "
+                    "WHERE id = ? AND status IN ('queued', 'running')",
+                    (_utcnow_iso(), error, mlflow_run_id, experiment_id),
+                )
+            else:
+                await conn.execute(
+                    "UPDATE experiments SET status = 'failed', finished_at = ?, "
+                    "error = ? WHERE id = ? AND status IN ('queued', 'running')",
+                    (_utcnow_iso(), error, experiment_id),
+                )
             await repository.log_event(
                 conn,
                 experiment_id=experiment_id,

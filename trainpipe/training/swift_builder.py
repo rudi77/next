@@ -4,11 +4,32 @@ We never use shell=True. CUDA_VISIBLE_DEVICES and NPROC_PER_NODE are passed
 via the env dict so multi-GPU launches work on Linux.
 """
 
+import shutil
+import sys
+from functools import lru_cache
 from pathlib import Path
 
 from ..api.schemas import ExperimentSpec
 
 _LORA_FAMILY = {"lora", "qlora", "longlora", "adalora"}
+
+
+@lru_cache(maxsize=1)
+def _resolve_swift_binary() -> str:
+    """Return an absolute path to the swift CLI, falling back to the literal name.
+
+    Order of preference: shutil.which (respects PATH), the bin dir of the
+    interpreter running us (handles venv'd installs where PATH wasn't set up),
+    then the literal 'swift' so the subprocess fails loudly with a clear
+    FileNotFoundError if nothing matches.
+    """
+    found = shutil.which("swift")
+    if found:
+        return found
+    venv_bin = Path(sys.executable).parent / "swift"
+    if venv_bin.is_file():
+        return str(venv_bin)
+    return "swift"
 
 
 def build_swift_command(
@@ -21,7 +42,7 @@ def build_swift_command(
     if not gpu_ids:
         raise ValueError("gpu_ids must contain at least one GPU index")
 
-    argv: list[str] = ["swift", "sft"]
+    argv: list[str] = [_resolve_swift_binary(), "sft"]
 
     # ms-swift v4 renamed --model_id_or_path → --model, --sft_type → --tuner_type
     # (and --lora_target_modules → --target_modules below).

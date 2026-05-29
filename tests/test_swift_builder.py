@@ -35,7 +35,8 @@ def test_argv_contains_core_flags():
         ),
     )
     argv, env = build_swift_command(spec, gpu_ids=[0, 1], output_dir=Path("/out"))
-    assert argv[0:2] == ["swift", "sft"]
+    assert argv[0].endswith("swift") or argv[0] == "swift"
+    assert argv[1] == "sft"
     assert _argv_pair(argv, "--model") == "qwen/Qwen2-VL-2B-Instruct"
     assert _argv_pair(argv, "--model_type") == "qwen2-vl"
     assert _argv_pair(argv, "--tuner_type") == "lora"
