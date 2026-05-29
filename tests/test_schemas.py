@@ -66,3 +66,37 @@ def test_study_config_roundtrip():
     assert restored == cfg
     assert restored.direction == "minimize"
     assert restored.sampler == "tpe"
+
+
+def test_study_config_rejects_zero_max_concurrent():
+    import pytest
+
+    with pytest.raises(Exception):
+        StudyConfig(
+            name="x",
+            base_spec=_minimal_spec(),
+            search_space={
+                "hyperparameters.learning_rate": SearchSpaceEntry(
+                    kind="loguniform", low=1e-5, high=1e-3
+                )
+            },
+            target_metric="eval/loss",
+            max_concurrent=0,
+        )
+
+
+def test_study_config_rejects_zero_n_trials():
+    import pytest
+
+    with pytest.raises(Exception):
+        StudyConfig(
+            name="x",
+            base_spec=_minimal_spec(),
+            search_space={
+                "hyperparameters.learning_rate": SearchSpaceEntry(
+                    kind="loguniform", low=1e-5, high=1e-3
+                )
+            },
+            target_metric="eval/loss",
+            n_trials=0,
+        )

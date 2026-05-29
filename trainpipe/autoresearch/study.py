@@ -84,6 +84,12 @@ class StudyDriver:
                 sampler=_build_sampler(self.config.sampler),
             )
 
+            # If a prior process crashed mid-trial, Optuna keeps those trials
+            # in RUNNING state forever and ask() would issue fresh trial
+            # numbers in parallel, creating duplicate experiment rows. Fail
+            # the orphans so the study state is consistent.
+            await self._reconcile_pending_trials(study)
+
             sem = asyncio.Semaphore(self.config.max_concurrent)
             target = self.config.n_trials
             launched = 0
@@ -185,19 +191,11 @@ class StudyDriver:
         return None
 
     async def _update_progress(self, study, conn) -> None:
-        import optuna
-
-        try:
-            best = study.best_trial
-            best_value = best.value
-            best_trial_id = best.user_attrs.get("experiment_id")
-        except ValueError:
-            best_value = None
-            best_trial_id = None
-        n_completed = sum(
-            1
-            for t in study.trials
-            if t.state == optuna.trial.TrialState.COMPLETE
+        # Optuna's .best_trial and .trials are sync DB-backed property
+        # accessors. For large studies on slow disks they can block the loop
+        # for hundreds of milliseconds, so push them to a thread.
+        best_value, best_trial_id, n_completed = await asyncio.to_thread(
+            _summarize_study, study
         )
         await repository.update_study_progress(
             conn,
@@ -206,6 +204,53 @@ class StudyDriver:
             best_value=best_value,
             best_trial_id=best_trial_id,
         )
+
+    async def _reconcile_pending_trials(self, study) -> None:
+        import optuna
+
+        def collect_pending():
+            return [
+                t
+                for t in study.trials
+                if t.state == optuna.trial.TrialState.RUNNING
+            ]
+
+        pending = await asyncio.to_thread(collect_pending)
+        for t in pending:
+            try:
+                await asyncio.to_thread(
+                    study.tell, t, state=optuna.trial.TrialState.FAIL
+                )
+                logger.warning(
+                    "study=%s reconciled orphaned trial=%s as FAIL "
+                    "(experiment_id=%s)",
+                    self.study_id,
+                    t.number,
+                    t.user_attrs.get("experiment_id"),
+                )
+            except Exception:
+                logger.exception(
+                    "study=%s could not reconcile trial=%s",
+                    self.study_id,
+                    t.number,
+                )
+
+
+def _summarize_study(study) -> tuple[float | None, str | None, int]:
+    """Read best_trial + completed-count off the Optuna study. Sync, blocks I/O."""
+    import optuna
+
+    try:
+        best = study.best_trial
+        best_value = best.value
+        best_trial_id = best.user_attrs.get("experiment_id")
+    except ValueError:
+        best_value = None
+        best_trial_id = None
+    n_completed = sum(
+        1 for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+    )
+    return best_value, best_trial_id, n_completed
 
 
 def _read_metric(mlflow_run_id: str, metric_name: str) -> float | None:

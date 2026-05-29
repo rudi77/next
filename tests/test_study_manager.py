@@ -86,7 +86,7 @@ def test_cancel_unknown_returns_false(monkeypatch, tmp_path):
     assert asyncio.run(go()) is False
 
 
-def test_cancel_stops_driver_and_marks_completed(monkeypatch, tmp_path):
+def test_cancel_stops_driver_and_marks_cancelled(monkeypatch, tmp_path):
     _StubDriver.instances.clear()
     monkeypatch.setattr(manager_module, "StudyDriver", _StubDriver)
     monkeypatch.setattr(
@@ -105,5 +105,5 @@ def test_cancel_stops_driver_and_marks_completed(monkeypatch, tmp_path):
 
     ok, rec = asyncio.run(go())
     assert ok is True
-    assert rec.status.value == "completed"
+    assert rec.status.value == "cancelled"
     assert _StubDriver.instances[0].stopped is True

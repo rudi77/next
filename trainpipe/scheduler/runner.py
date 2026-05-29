@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import signal
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -91,14 +92,21 @@ async def spawn_training_subprocess(
     )
 
     async def tee() -> None:
+        # Per-line flush would burn the event loop on tqdm-style progress
+        # output. Buffer in user space and flush at most once a second so the
+        # SSE log tail still sees fresh data without blocking the scheduler.
         assert process.stdout is not None
+        last_flush = time.monotonic()
         with log_path.open("ab") as f:
             while True:
                 chunk = await process.stdout.readline()
                 if not chunk:
                     break
                 f.write(chunk)
-                f.flush()
+                now = time.monotonic()
+                if now - last_flush >= 1.0:
+                    f.flush()
+                    last_flush = now
 
     tee_task = asyncio.create_task(
         tee(), name=f"trainpipe-tee-{experiment_id}"

@@ -7,6 +7,7 @@ POST /studies.
 
 import asyncio
 import logging
+import uuid
 
 from ..api.schemas import StudyConfig, StudyStatus
 from ..core import repository
@@ -30,15 +31,15 @@ class StudyManager:
             await self._start_driver(rec.id, rec.config, rec.optuna_storage)
 
     async def create_and_start(self, config: StudyConfig) -> str:
-        async with self.db.connect() as conn:
-            study_id = await repository.create_study(conn, config, "pending")
+        # Generate the id up-front so we can derive the storage URL before the
+        # INSERT — avoids a two-step INSERT/UPDATE with a 'pending' placeholder
+        # that a crash between the two commits would leave permanently broken.
+        study_id = uuid.uuid4().hex
         storage = self._optuna_url(study_id)
         async with self.db.connect() as conn:
-            await conn.execute(
-                "UPDATE studies SET optuna_storage = ? WHERE id = ?",
-                (storage, study_id),
+            await repository.create_study(
+                conn, config, storage, study_id=study_id
             )
-            await conn.commit()
         await self._start_driver(study_id, config, storage)
         return study_id
 
@@ -49,7 +50,9 @@ class StudyManager:
             return False
         await driver.stop()
         async with self.db.connect() as conn:
-            await repository.set_study_status(conn, study_id, StudyStatus.COMPLETED)
+            await repository.set_study_status(
+                conn, study_id, StudyStatus.CANCELLED
+            )
         return True
 
     async def stop_all(self) -> None:

@@ -183,8 +183,11 @@ async def create_study(
     conn: aiosqlite.Connection,
     config: StudyConfig,
     optuna_storage: str,
+    *,
+    study_id: str | None = None,
 ) -> str:
-    study_id = uuid.uuid4().hex
+    if study_id is None:
+        study_id = uuid.uuid4().hex
     now = utcnow_iso()
     await conn.execute(
         "INSERT INTO studies (id, name, config_json, status, optuna_storage, n_trials_target, "

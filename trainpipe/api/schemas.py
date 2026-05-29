@@ -19,6 +19,7 @@ class StudyStatus(str, Enum):
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -113,8 +114,8 @@ class StudyConfig(BaseModel):
     search_space: dict[str, SearchSpaceEntry]
     target_metric: str
     direction: Literal["minimize", "maximize"] = "minimize"
-    n_trials: int | None = None
-    max_concurrent: int = 4
+    n_trials: int | None = Field(None, ge=1)
+    max_concurrent: int = Field(4, ge=1, le=64)
     sampler: Literal["tpe", "random", "cmaes"] = "tpe"
 
 
