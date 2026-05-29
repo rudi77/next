@@ -169,6 +169,7 @@ def _row_to_study_record(row: aiosqlite.Row) -> StudyRecord:
         name=row["name"],
         config=StudyConfig.model_validate_json(row["config_json"]),
         status=StudyStatus(row["status"]),
+        optuna_storage=row["optuna_storage"],
         n_trials_target=row["n_trials_target"],
         n_trials_completed=row["n_trials_completed"],
         best_value=row["best_value"],

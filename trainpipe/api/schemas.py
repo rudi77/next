@@ -123,6 +123,7 @@ class StudyRecord(BaseModel):
     name: str
     config: StudyConfig
     status: StudyStatus
+    optuna_storage: str
     n_trials_target: int | None = None
     n_trials_completed: int = 0
     best_value: float | None = None

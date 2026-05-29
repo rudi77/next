@@ -3,9 +3,14 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from trainpipe.api.deps import get_db, get_gpu_pool, get_scheduler
+from trainpipe.api.deps import (
+    get_db,
+    get_gpu_pool,
+    get_scheduler,
+    get_study_manager,
+)
 from trainpipe.api.main import app
-from trainpipe.api.schemas import ExperimentSpec
+from trainpipe.api.schemas import ExperimentSpec, StudyConfig
 from trainpipe.core import repository
 from trainpipe.core.db import Database
 from trainpipe.scheduler.gpu_pool import GpuPool
@@ -22,6 +27,21 @@ class _NoopScheduler:
         return True
 
 
+class _StubStudyManager:
+    def __init__(self) -> None:
+        self.created: list[StudyConfig] = []
+        self.cancelled_ids: list[str] = []
+        self.cancel_outcome: bool = True
+
+    async def create_and_start(self, config: StudyConfig) -> str:
+        self.created.append(config)
+        return f"stub-{len(self.created)}"
+
+    async def cancel(self, study_id: str) -> bool:
+        self.cancelled_ids.append(study_id)
+        return self.cancel_outcome
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -35,12 +55,19 @@ def state(tmp_path, monkeypatch):
 
     pool = GpuPool([])
     scheduler = _NoopScheduler()
+    study_manager = _StubStudyManager()
 
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_scheduler] = lambda: scheduler
     app.dependency_overrides[get_gpu_pool] = lambda: pool
+    app.dependency_overrides[get_study_manager] = lambda: study_manager
 
-    yield {"db": db, "pool": pool, "scheduler": scheduler}
+    yield {
+        "db": db,
+        "pool": pool,
+        "scheduler": scheduler,
+        "study_manager": study_manager,
+    }
 
     app.dependency_overrides.clear()
 
@@ -216,6 +243,59 @@ def test_logs_returns_file_content(state, client, tmp_path):
     assert r.status_code == 200
     assert "training-line-1" in r.text
     assert "training-line-2" in r.text
+
+
+def test_create_study_returns_id_from_manager(state, client):
+    payload = {
+        "name": "sweep-1",
+        "base_spec": {"model": "m", "dataset": ["d"]},
+        "search_space": {
+            "hyperparameters.learning_rate": {
+                "kind": "loguniform",
+                "low": 1e-5,
+                "high": 1e-2,
+            }
+        },
+        "target_metric": "eval/loss",
+        "n_trials": 5,
+    }
+    r = client.post("/studies", json=payload, headers=HEADERS)
+    assert r.status_code == 201
+    assert r.json()["study_id"] == "stub-1"
+    assert len(state["study_manager"].created) == 1
+    assert state["study_manager"].created[0].name == "sweep-1"
+
+
+def test_cancel_study_404_when_no_record(state, client):
+    r = client.post("/studies/no-such-id/cancel", headers=HEADERS)
+    assert r.status_code == 404
+
+
+def test_cancel_study_invokes_manager_when_record_exists(state, client):
+    # Insert a study row directly so the route's 404 check passes.
+    async def insert():
+        from trainpipe.api.schemas import StudyConfig
+
+        cfg = StudyConfig(
+            name="s",
+            base_spec=ExperimentSpec(model="m", dataset=["d"]),
+            search_space={
+                "hyperparameters.learning_rate": {
+                    "kind": "loguniform",
+                    "low": 1e-5,
+                    "high": 1e-2,
+                }
+            },
+            target_metric="eval/loss",
+        )
+        async with state["db"].connect() as conn:
+            return await repository.create_study(conn, cfg, "sqlite:///dummy")
+
+    sid = _run(insert())
+    r = client.post(f"/studies/{sid}/cancel", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    assert sid in state["study_manager"].cancelled_ids
 
 
 def test_stream_logs_emits_end_on_terminal_status(state, client, tmp_path):

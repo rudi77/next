@@ -1,5 +1,6 @@
 from fastapi import Request
 
+from ..autoresearch.manager import StudyManager
 from ..core.db import Database
 from ..scheduler.gpu_pool import GpuPool
 from ..scheduler.loop import Scheduler
@@ -15,3 +16,7 @@ def get_scheduler(request: Request) -> Scheduler:
 
 def get_gpu_pool(request: Request) -> GpuPool:
     return request.app.state.gpu_pool
+
+
+def get_study_manager(request: Request) -> StudyManager:
+    return request.app.state.study_manager
