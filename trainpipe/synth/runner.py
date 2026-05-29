@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,6 +22,60 @@ from typing import Any
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+class RetriableHTTPError(RuntimeError):
+    """Provider HTTP error that justifies a retry (429 / 5xx)."""
+
+
+class FatalHTTPError(RuntimeError):
+    """Provider HTTP error that won't get better with retries (401 / 400)."""
+
+
+def _classify_http_error(status: int, body: str) -> RuntimeError:
+    snippet = body[:512]
+    if status == 429 or 500 <= status < 600:
+        return RetriableHTTPError(f"HTTP {status}: {snippet}")
+    return FatalHTTPError(f"HTTP {status}: {snippet}")
+
+
+def _post_with_retry(
+    client: httpx.Client,
+    path: str,
+    *,
+    json_body: dict,
+    max_retries: int = 2,
+    backoff_base: float = 1.0,
+) -> httpx.Response:
+    """POST with retry on 429 / 5xx.
+
+    ``max_retries`` is the number of *additional* attempts beyond the
+    first (so 2 means up to 3 calls total). Backoff is
+    ``backoff_base * 2**attempt`` seconds — capped via the caller's
+    overall timeout, so a wedged endpoint can't make us sleep forever.
+    """
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        resp = client.post(path, json=json_body)
+        if not resp.is_error:
+            return resp
+        err = _classify_http_error(resp.status_code, resp.text)
+        if isinstance(err, FatalHTTPError) or attempt == max_retries:
+            raise err
+        last_err = err
+        sleep_s = backoff_base * (2**attempt)
+        logger.warning(
+            "provider %s returned %d, retry %d/%d in %.1fs",
+            path,
+            resp.status_code,
+            attempt + 1,
+            max_retries,
+            sleep_s,
+        )
+        time.sleep(sleep_s)
+    # Unreachable: the loop either returns or raises before this point.
+    assert last_err is not None
+    raise last_err
 
 
 class SynthProvider(ABC):
@@ -60,18 +115,15 @@ class AnthropicProvider(SynthProvider):
             },
             timeout=httpx.Timeout(60.0, connect=10.0),
         ) as client:
-            resp = client.post(
+            resp = _post_with_retry(
+                client,
                 "/v1/messages",
-                json={
+                json_body={
                     "model": model,
                     "max_tokens": max_tokens,
                     "messages": [{"role": "user", "content": prompt}],
                 },
             )
-            if resp.is_error:
-                raise RuntimeError(
-                    f"anthropic HTTP {resp.status_code}: {resp.text[:512]}"
-                )
             body = resp.json()
             # Concatenate text blocks.
             blocks = body.get("content") or []
@@ -102,18 +154,15 @@ class OpenAIProvider(SynthProvider):
             },
             timeout=httpx.Timeout(60.0, connect=10.0),
         ) as client:
-            resp = client.post(
+            resp = _post_with_retry(
+                client,
                 "/v1/chat/completions",
-                json={
+                json_body={
                     "model": model,
                     "max_tokens": max_tokens,
                     "messages": [{"role": "user", "content": prompt}],
                 },
             )
-            if resp.is_error:
-                raise RuntimeError(
-                    f"openai HTTP {resp.status_code}: {resp.text[:512]}"
-                )
             body = resp.json()
             choices = body.get("choices") or []
             if not choices:
@@ -176,6 +225,16 @@ def _format_prompt(record: dict[str, Any], instruction: str) -> str:
     return f"{instruction.strip()}\n\nSource record:\n{json.dumps(record, ensure_ascii=False)}"
 
 
+class SynthAborted(RuntimeError):
+    """Raised when too many consecutive provider calls failed in a row.
+
+    The caller (route layer) translates this into a 422/502 with an
+    actionable message — "your token is bad / provider is down, fix it
+    instead of letting us burn through ``target_count`` requests in a
+    tight loop".
+    """
+
+
 def generate_synthetic(
     *,
     provider: SynthProvider,
@@ -186,13 +245,23 @@ def generate_synthetic(
     out_path: Path,
     seed: int = 0,
     max_tokens: int = 1024,
+    max_consecutive_failures: int = 5,
 ) -> int:
     """Run the full synth job. Returns the number of records written.
 
-    Failures on individual records are logged and skipped; one bad
-    teacher reply doesn't abort the whole batch.
+    Per-record failures are logged and skipped *as long as they're
+    intermittent*. ``max_consecutive_failures`` failures in a row trip
+    the early-abort: the job stops calling the provider and raises
+    :class:`SynthAborted`, leaving whatever records did succeed on disk.
+    This bounds the damage when the provider is hard-down (bad key,
+    network outage, rate-limit-everywhere).
+
+    A :class:`FatalHTTPError` from a provider (401, 400 — anything that
+    won't get better with retries) also trips the abort immediately
+    rather than burning a single fault into ``target_count`` calls.
     """
     written = 0
+    consecutive_failures = 0
     with out_path.open("w", encoding="utf-8") as out:
         for source_record in _iter_source(source_path, seed, sample_n=target_count):
             prompt = _format_prompt(source_record, instruction)
@@ -200,11 +269,27 @@ def generate_synthetic(
                 completion = provider.generate(
                     prompt, model=model, max_tokens=max_tokens
                 )
-            except Exception:
-                logger.exception(
-                    "synth: provider call failed; skipping record"
+            except FatalHTTPError as e:
+                raise SynthAborted(
+                    f"provider returned fatal error: {e}. Aborting after "
+                    f"{written} records to avoid burning further requests."
+                ) from None
+            except Exception as e:
+                consecutive_failures += 1
+                logger.warning(
+                    "synth: provider call failed (%d/%d consecutive): %s",
+                    consecutive_failures,
+                    max_consecutive_failures,
+                    e,
                 )
+                if consecutive_failures >= max_consecutive_failures:
+                    raise SynthAborted(
+                        f"{consecutive_failures} consecutive provider "
+                        f"failures (last: {e}). Aborting after {written} "
+                        f"records — check the provider key / service."
+                    ) from None
                 continue
+            consecutive_failures = 0
             record = {
                 "prompt": prompt,
                 "completion": completion,

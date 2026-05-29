@@ -232,6 +232,181 @@ def test_synth_route_requires_auth(state, client):
     assert r.status_code == 401
 
 
+def test_generate_synthetic_aborts_after_consecutive_failures(tmp_path):
+    """5 consecutive failures (default threshold) trip SynthAborted."""
+    from trainpipe.synth.runner import SynthAborted
+
+    src = _write_source(tmp_path, n=3)
+    out = tmp_path / "synth.jsonl"
+
+    def always_boom(p):
+        raise RuntimeError("provider down")
+
+    provider = MockProvider(transform=always_boom)
+    with pytest.raises(SynthAborted, match="consecutive"):
+        generate_synthetic(
+            provider=provider,
+            model="m",
+            source_path=src,
+            instruction="x",
+            target_count=20,
+            out_path=out,
+            max_consecutive_failures=3,
+        )
+
+
+def test_generate_synthetic_fatal_error_aborts_immediately(tmp_path):
+    """A FatalHTTPError (401, 400, etc.) aborts on the first call —
+    no point retrying or burning through ``target_count`` requests."""
+    from trainpipe.synth.runner import FatalHTTPError, SynthAborted
+
+    src = _write_source(tmp_path, n=3)
+    out = tmp_path / "synth.jsonl"
+
+    call_count = 0
+
+    def fatal(p):
+        nonlocal call_count
+        call_count += 1
+        raise FatalHTTPError("HTTP 401: bad key")
+
+    with pytest.raises(SynthAborted, match="fatal"):
+        generate_synthetic(
+            provider=MockProvider(transform=fatal),
+            model="m",
+            source_path=src,
+            instruction="x",
+            target_count=100,
+            out_path=out,
+        )
+    assert call_count == 1
+
+
+def test_generate_synthetic_failure_counter_resets_on_success(tmp_path):
+    """A successful call between failures must reset the counter so we
+    don't trip the abort on aggregate-across-the-run failure noise."""
+    src = _write_source(tmp_path, n=10)
+    out = tmp_path / "synth.jsonl"
+
+    call_count = 0
+
+    def flaky(p):
+        nonlocal call_count
+        call_count += 1
+        # Pattern: fail, succeed, fail, succeed, ... — never 3 in a row.
+        if call_count % 2 == 1:
+            raise RuntimeError("flake")
+        return "ok"
+
+    written = generate_synthetic(
+        provider=MockProvider(transform=flaky),
+        model="m",
+        source_path=src,
+        instruction="x",
+        target_count=10,
+        out_path=out,
+        max_consecutive_failures=3,
+    )
+    # Half succeed, half fail — exactly 5 records written.
+    assert written == 5
+
+
+def test_synth_route_502_on_aborted(state, client, monkeypatch):
+    """SynthAborted from the runner must surface as a 502 (upstream
+    issue), not a 500 (internal error)."""
+    src = _write_source(state["tmp"])
+
+    class _Down:
+        name = "mock"
+
+        def generate(self, prompt, *, model, max_tokens):
+            from trainpipe.synth.runner import FatalHTTPError
+
+            raise FatalHTTPError("HTTP 401: invalid key")
+
+    monkeypatch.setattr("trainpipe.api.routes.synth.make_provider", lambda n: _Down())
+    r = client.post(
+        "/synth",
+        headers=HEADERS,
+        json={
+            "provider": "mock",
+            "model": "m",
+            "source_dataset": str(src),
+            "instruction": "x",
+            "target_count": 50,
+            "name": "x",
+        },
+    )
+    assert r.status_code == 502
+    assert r.json()["detail"]["error"] == "synth_aborted"
+
+
+def test_post_with_retry_retries_on_429(monkeypatch):
+    """The retry helper must retry on 429 with backoff and return on success."""
+    import time as _time
+
+    import trainpipe.synth.runner as runner
+
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    call_count = 0
+
+    class _FakeClient:
+        def post(self, path, json):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                resp = type(
+                    "R",
+                    (),
+                    {
+                        "is_error": True,
+                        "status_code": 429,
+                        "text": "Too many",
+                    },
+                )()
+                return resp
+            return type("R", (), {"is_error": False, "status_code": 200})()
+
+    resp = runner._post_with_retry(
+        _FakeClient(),
+        "/foo",
+        json_body={},
+        max_retries=3,
+        backoff_base=0.01,
+    )
+    assert resp.status_code == 200
+    assert call_count == 3
+
+
+def test_post_with_retry_gives_up_on_fatal(monkeypatch):
+    """A 401 is fatal — no retry, raise FatalHTTPError immediately."""
+    import trainpipe.synth.runner as runner
+    from trainpipe.synth.runner import FatalHTTPError
+
+    call_count = 0
+
+    class _FakeClient:
+        def post(self, path, json):
+            nonlocal call_count
+            call_count += 1
+            return type(
+                "R",
+                (),
+                {"is_error": True, "status_code": 401, "text": "bad key"},
+            )()
+
+    with pytest.raises(FatalHTTPError):
+        runner._post_with_retry(
+            _FakeClient(),
+            "/foo",
+            json_body={},
+            max_retries=3,
+            backoff_base=0.01,
+        )
+    assert call_count == 1  # no retry on fatal
+
+
 def test_synth_route_dedup_by_sha(state, client):
     src = _write_source(state["tmp"], n=2)
     payload = {

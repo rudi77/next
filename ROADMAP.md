@@ -295,9 +295,8 @@ Eval-Verbesserung.
   Annotation reicht für Acceptance; Auto-Trigger ist Phase 17 (watches)
 
 ### UI
-- [ ] Tab „Active Learning" — Queue-Anzeige im UI nicht implementiert,
-  da CLI/MCP-Workflow ausreichend für initialen Loop. Folgt wenn der
-  User es explizit braucht; alle Endpoints sind bereits da.
+- [x] Tab „Active Learning" — Runs-Tabelle + Queue-Modal mit
+  per-Item "Done"-Button (mark annotated)
 - [ ] Iteration-Dashboard — depends on watches (Phase 17)
 
 ---
@@ -333,9 +332,9 @@ nach Erfolg der vorigen, finaler Checkpoint wird registriert.
 - [x] `POST /pipelines/{id}/cancel`
 
 ### UI
-- [ ] Tab „Pipelines" — DAG-Visualisierung nicht implementiert; REST
-  + MCP-Workflow reicht für Akzeptanz. UI-Tab folgt wenn der User es
-  explizit braucht.
+- [x] Tab „Pipelines" — Status-Tabelle mit per-Stage Status-Pills
+  (pending/queued/running/completed/failed/skipped) und Tooltip mit
+  Fehlertext. Volle DAG-SVG-Visualisierung weiterhin offen.
 
 ---
 
@@ -467,7 +466,8 @@ Cron-Schedule triggern und einen neuen Pipeline-Run starten.
   completed eval_run gegen die Suite gelesen und mean unterhalb der
   threshold getriggert; Re-fire-Protect verhindert das gleiche Eval
   doppelt zu triggern
-- [ ] UI: Tab „Watches" — REST + Tests reichen für Acceptance; UI folgt
+- [x] UI: Tab „Watches" — Tabelle mit kind / trigger / status / last-fired,
+  Enable/Disable/Delete Actions, zeigt last_error und Failure-Counter
 
 ---
 
@@ -512,8 +512,8 @@ messen.
   die quantisierte Version übernommen → UI/Compare zeigt Δ direkt;
   auto_eval-Hook (Phase 6) erzeugt frische Resultate beim nächsten
   Eval-Trigger
-- [ ] UI: „Quantize" Action im Model-Detail — REST + MCP genügen für
-  Acceptance; UI-Knopf folgt
+- [x] UI: „Quantize" Action im Model-Detail (Modal mit method+bits,
+  pollt Modelle nach erfolgreichem POST)
 
 ---
 
@@ -528,8 +528,8 @@ Ranking-Leaderboard „bang per watt".
   beim Monitor-Exit; peak_vram + energy hängen am operator-side
   nvml-poller, der über `set_experiment_resource_usage` ins DB schreiben
   kann (Hook-Funktion vorhanden)
-- [ ] UI: Cost-Spalten in Experiment-Tabelle + Studies-Plot — REST
-  liefert die Daten, UI-Anzeige folgt
+- [x] UI: Cost-Spalten in Experiment-Tabelle (GPU-hrs + VRAM peak,
+  sichtbar ab xl-Breakpoint); Studies-Plot weiterhin offen
 
 ---
 
@@ -551,39 +551,48 @@ Produkt-Codes) als zusätzliche Tokens, damit das Modell sie nicht in
 ## Known follow-ups aus Code-Review (2026-05-29)
 
 Während der Phasen 7-21 wurden mehrere mittel-priorisierte Issues
-identifiziert, die nicht das aktuelle Acceptance-Kriterium blockieren
-aber bei Production-Rollout angegangen werden sollten:
+identifiziert. Status (2026-05-29 Abend, Follow-up-Pass):
 
 ### Atomic & lineage
-- [ ] **Pipeline-Driver** (`pipelines/driver.py:165-179`): Stage-Enqueue
-  läuft create_experiment + update_stage in zwei separaten Connections.
-  Crash zwischen den beiden hinterlässt einen orphan running experiment
-  ohne stage.experiment_id. Beide Writes in eine Transaction packen.
-- [ ] **Mix-Provenance** (`api/routes/datasets.py` `create_mix`): bei
-  N-Source-Mix wird `derived_from=recs[0].id` gesetzt. Lineage-Audit
-  (`models_using_dataset`) sieht die anderen Sources nicht — GDPR-
-  relevant. Pivot auf eine separate `dataset_lineage` Tabelle für
-  N:M relationships.
-- [ ] **PipelineManager.create_and_start** ist nicht atomic; zwei
-  parallele POSTs können `_drivers`-Map korrumpieren. `_lock` von cancel
-  wiederverwenden.
+- [x] **Pipeline-Driver**: `enqueue_stage_with_experiment` Helper —
+  INSERT experiments + INSERT events + UPDATE pipeline_stages in einer
+  BEGIN IMMEDIATE Transaktion, Rollback bei jedem Fehler.
+- [x] **Mix-Provenance**: Migration v13 `dataset_lineage` Tabelle
+  (N:M, mit `role`). `_persist_derived` schreibt für mix alle Parents
+  rein; `models_using_dataset_recursive` walked Descendants → korrektes
+  GDPR-Ergebnis.
+- [x] **PipelineManager.create_and_start** holt jetzt `self._lock`
+  bevor `_drivers`-Map verändert wird; `_start_driver_locked` ist
+  idempotent (re-entry no-op).
 
 ### Resilience
-- [ ] **Watch-Manager** (`watches/manager.py`): malformed
-  pipeline_config → ValueError in jedem Tick, swallowed + logged
-  forever. Persistenz "last_error" + auto-disable nach N Failures.
-- [ ] **Synth-Runner** (`synth/runner.py`): hard-down provider (401,
-  network outage) lässt target_count Requests rapid-fire durchlaufen.
-  Early-abort nach N konsekutiven Failures.
-- [ ] **Synth retry-on-429**: Docstring promises retry on 429/5xx, code
-  doesn't do it. Either implement or update the contract.
+- [x] **Watch-Manager**: Migration v12 fügt `consecutive_failures`
+  und `last_error` Spalten hinzu. `record_watch_failure` zählt, ab
+  `failure_disable_threshold` (default 5) wird der Watch
+  auto-disabled. Erfolgreicher Fire resettet den Counter.
+- [x] **Synth-Runner**: `max_consecutive_failures` (default 5) +
+  `FatalHTTPError` (401/400) trip `SynthAborted` sofort. Route
+  übersetzt zu 502.
+- [x] **Synth retry-on-429**: `_post_with_retry` mit exponential
+  backoff für 429/5xx; FatalHTTPError für 4xx-non-429.
 
 ### UI tabs (von Phasen 11, 12, 13, 17 aufgeschoben)
-- [ ] Active Learning Tab
-- [ ] Pipelines DAG-View
-- [ ] Watches Tab + last-fired pipeline link
-- [ ] Cost/Resource columns in Experiments table
-- [ ] Quantize button im Model-Detail
+- [x] Active Learning Tab — Runs-Tabelle + Queue-Modal mit
+  per-Item "Done" Button
+- [x] Pipelines Tab — Status-Tabelle mit per-Stage Pills,
+  Cancel-Action (volle DAG-SVG offen)
+- [x] Watches Tab — Tabelle + Enable/Disable/Delete, zeigt
+  last_error und Failure-Counter
+- [x] Cost/Resource columns in Experiments table (GPU-hrs + VRAM
+  peak, sichtbar ab xl-Breakpoint)
+- [x] Quantize button im Models-Tabelle (Modal mit method+bits)
+
+### Offene Items für später
+- [ ] Studies "Cost vs Best-Metric" Plot
+- [ ] Pipelines: SVG-DAG-Visualisierung
+- [ ] Active Learning: Iteration-Dashboard
+- [ ] Models: "Trained on" Liste im Model-Detail mit Dataset-Versions
+- [ ] Compliance-Skript "Forget user Y"
 
 ## Out of Scope (mit Begründung)
 

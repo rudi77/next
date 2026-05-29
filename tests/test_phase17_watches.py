@@ -307,6 +307,92 @@ async def test_metric_threshold_does_not_fire_when_above(state):
     assert fired == []
 
 
+async def test_failure_counter_increments_and_resets_on_success(state):
+    """Each failed fire bumps consecutive_failures; a successful fire
+    resets it back to 0."""
+    async with state["db"].connect() as conn:
+        wid = await repository.create_watch(
+            conn,
+            name="flaky",
+            kind="interval",
+            pipeline_config=_pipeline_cfg(),
+            interval_seconds=60,
+        )
+
+    # First two ticks: pipeline creation raises.
+    boom_count = 0
+
+    async def boom(name, cfg):
+        nonlocal boom_count
+        boom_count += 1
+        raise ValueError("malformed pipeline config")
+
+    state["wmanager"].pipelines.create_and_start = boom  # type: ignore[assignment]
+    await state["wmanager"]._tick()
+
+    async with state["db"].connect() as conn:
+        w = await repository.get_watch(conn, wid)
+    assert w.consecutive_failures == 1
+    assert "ValueError" in (w.last_error or "")
+    assert w.enabled is True
+
+    # Now flip to success — counter resets.
+    async def ok(name, cfg):
+        return "pipeline-id"
+
+    state["wmanager"].pipelines.create_and_start = ok  # type: ignore[assignment]
+    await state["wmanager"]._tick()
+    async with state["db"].connect() as conn:
+        w = await repository.get_watch(conn, wid)
+    assert w.consecutive_failures == 0
+    assert w.last_error is None
+
+
+async def test_auto_disable_after_threshold(state):
+    """After failure_disable_threshold consecutive failures, the watch
+    must flip enabled=False so it stops getting polled."""
+    state["wmanager"].failure_disable_threshold = 3
+
+    async with state["db"].connect() as conn:
+        wid = await repository.create_watch(
+            conn,
+            name="broken",
+            kind="interval",
+            pipeline_config=_pipeline_cfg(),
+            interval_seconds=60,
+        )
+
+    async def boom(name, cfg):
+        raise ValueError("DAG cycle")
+
+    state["wmanager"].pipelines.create_and_start = boom  # type: ignore[assignment]
+
+    # Three ticks → three failures → auto-disabled. Need to refresh
+    # ``last_fired_at`` reasoning: since the watch never successfully
+    # fired, the "should_fire" check always returns True for an interval
+    # watch with no prior fire.
+    for _ in range(3):
+        await state["wmanager"]._tick()
+
+    async with state["db"].connect() as conn:
+        w = await repository.get_watch(conn, wid)
+    assert w.consecutive_failures == 3
+    assert w.enabled is False
+    assert "DAG cycle" in (w.last_error or "")
+
+    # Disabled watches must not be touched by subsequent ticks.
+    call_count = 0
+
+    async def counting(name, cfg):
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("still broken")
+
+    state["wmanager"].pipelines.create_and_start = counting  # type: ignore[assignment]
+    await state["wmanager"]._tick()
+    assert call_count == 0
+
+
 async def test_disabled_watch_not_polled(state):
     async with state["db"].connect() as conn:
         wid = await repository.create_watch(

@@ -43,11 +43,11 @@
 
     <!-- Tabs (scroll-x on narrow phones) -->
     <nav class="max-w-screen-xl mx-auto px-2 sm:px-4 pb-0 flex gap-1 overflow-x-auto scrollbar-thin">
-      <template x-for="t in ['experiments','studies','evals','models','playground','datasets','gpus']" :key="t">
+      <template x-for="t in ['experiments','studies','pipelines','evals','models','playground','active-learning','watches','datasets','gpus']" :key="t">
         <button @click="tab = t"
                 :class="tab === t ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'"
-                class="shrink-0 px-3 sm:px-4 py-2.5 sm:py-2 rounded-t text-sm capitalize">
-          <span x-text="t"></span>
+                class="shrink-0 px-3 sm:px-4 py-2.5 sm:py-2 rounded-t text-sm">
+          <span x-text="t.replace('-', ' ')" class="capitalize"></span>
         </button>
       </template>
     </nav>
@@ -88,6 +88,8 @@
               <th class="px-3 py-2">Status</th>
               <th class="px-3 py-2 hidden md:table-cell">Model</th>
               <th class="px-3 py-2 hidden sm:table-cell">GPUs</th>
+              <th class="px-3 py-2 hidden xl:table-cell">GPU-hrs</th>
+              <th class="px-3 py-2 hidden xl:table-cell">VRAM peak</th>
               <th class="px-3 py-2 hidden lg:table-cell">Created</th>
             </tr>
           </thead>
@@ -114,11 +116,15 @@
                 </td>
                 <td class="px-3 py-2 text-slate-600 hidden md:table-cell" x-text="e.spec.model"></td>
                 <td class="px-3 py-2 text-slate-600 hidden sm:table-cell" x-text="(e.gpu_ids||[]).join(',') || '—'"></td>
+                <td class="px-3 py-2 text-slate-600 text-xs hidden xl:table-cell"
+                    x-text="e.gpu_seconds ? (e.gpu_seconds/3600).toFixed(2) + 'h' : '—'"></td>
+                <td class="px-3 py-2 text-slate-600 text-xs hidden xl:table-cell"
+                    x-text="e.peak_vram_mb ? (e.peak_vram_mb/1024).toFixed(1) + ' GB' : '—'"></td>
                 <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(e.created_at)"></td>
               </tr>
             </template>
             <tr x-show="experiments.length === 0">
-              <td colspan="5" class="px-3 py-8 text-center text-slate-400 text-sm">
+              <td colspan="7" class="px-3 py-8 text-center text-slate-400 text-sm">
                 No experiments yet. Submit one to get started.
               </td>
             </tr>
@@ -487,8 +493,10 @@
                 <td class="px-3 py-2 text-slate-600 text-xs font-mono hidden md:table-cell" x-text="m.base_model"></td>
                 <td class="px-3 py-2 text-xs hidden lg:table-cell" x-text="modelBestEval(m)"></td>
                 <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(m.created_at)"></td>
-                <td class="px-3 py-2 text-right">
+                <td class="px-3 py-2 text-right whitespace-nowrap">
                   <button @click="openSetAlias(m)" class="text-cyan-700 hover:underline text-xs mr-2">Alias</button>
+                  <button @click="openQuantize(m)" class="text-amber-700 hover:underline text-xs mr-2"
+                          title="Create a quantized version">Quantize</button>
                   <button @click="deleteModel(m)" class="text-rose-600 hover:underline text-xs">Delete</button>
                 </td>
               </tr>
@@ -496,6 +504,193 @@
             <tr x-show="models.length === 0">
               <td colspan="7" class="px-3 py-8 text-center text-slate-400 text-sm">
                 No registered models yet. Train an experiment to completion and click + Register.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Pipelines tab ──────────────────────────────────────────── -->
+    <section x-show="tab === 'pipelines'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Pipelines</h2>
+      </div>
+      <p class="text-sm text-slate-600 mb-3">
+        Multi-stage training (CPT → SFT → DPO and friends).
+        Submit via <code class="text-xs bg-slate-100 px-1 rounded">POST /pipelines</code>
+        or MCP. Each stage runs as a regular experiment under the hood.
+      </p>
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2">Stages</th>
+              <th class="px-3 py-2 hidden md:table-cell">Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="p in pipelines" :key="p.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex flex-col">
+                    <span x-text="p.name"></span>
+                    <span class="text-slate-400 text-xs font-mono" x-text="p.id.slice(0,10) + '…'"></span>
+                  </div>
+                </td>
+                <td class="px-3 py-2">
+                  <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                        :class="statusColor(p.status)" x-text="p.status"></span>
+                </td>
+                <td class="px-3 py-2 text-xs">
+                  <template x-for="s in p.stages" :key="s.stage_name">
+                    <span class="inline-block rounded px-1.5 py-0.5 mr-1 mb-0.5"
+                          :class="stageColor(s.status)"
+                          :title="s.stage_name + ': ' + s.status + (s.error ? ' — ' + s.error : '')"
+                          x-text="s.stage_name"></span>
+                  </template>
+                </td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden md:table-cell" x-text="fmtTime(p.created_at)"></td>
+                <td class="px-3 py-2 text-right">
+                  <button x-show="p.status === 'queued' || p.status === 'running'"
+                          @click="cancelPipeline(p.id)"
+                          class="text-rose-600 hover:underline text-xs">Cancel</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="pipelines.length === 0">
+              <td colspan="5" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No pipelines yet.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Active Learning tab ────────────────────────────────────── -->
+    <section x-show="tab === 'active-learning'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Active Learning</h2>
+      </div>
+      <p class="text-sm text-slate-600 mb-3">
+        Run uncertainty scoring against an unlabeled dataset to surface the
+        most informative samples for human review. Submit via
+        <code class="text-xs bg-slate-100 px-1 rounded">POST /active-learning/runs</code>.
+      </p>
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Run</th>
+              <th class="px-3 py-2">Model</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2 hidden md:table-cell">Scored / Queued</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in alRuns" :key="r.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-mono text-xs" x-text="r.id.slice(0,10) + '…'"></td>
+                <td class="px-3 py-2 font-mono text-xs" x-text="r.model_ref"></td>
+                <td class="px-3 py-2">
+                  <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                        :class="statusColor(r.status)" x-text="r.status"></span>
+                </td>
+                <td class="px-3 py-2 text-slate-600 text-xs hidden md:table-cell"
+                    x-text="(r.scored_count ?? '—') + ' / ' + (r.queued_count ?? '—')"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(r.created_at)"></td>
+                <td class="px-3 py-2 text-right">
+                  <button x-show="r.status === 'completed'"
+                          @click="openAlQueue(r)"
+                          class="text-cyan-700 hover:underline text-xs">View queue</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="alRuns.length === 0">
+              <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No active-learning runs yet.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Watches tab ────────────────────────────────────────────── -->
+    <section x-show="tab === 'watches'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Watches</h2>
+      </div>
+      <p class="text-sm text-slate-600 mb-3">
+        Continuous-training triggers — fire a pipeline on an interval or
+        when an eval metric drops below a threshold.
+      </p>
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Kind</th>
+              <th class="px-3 py-2">Trigger</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2 hidden md:table-cell">Last fired</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="w in watches" :key="w.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex flex-col">
+                    <span x-text="w.name"></span>
+                    <span x-show="w.last_error"
+                          class="text-rose-600 text-xs truncate max-w-[40vw]"
+                          :title="w.last_error"
+                          x-text="'⚠ ' + w.last_error"></span>
+                  </div>
+                </td>
+                <td class="px-3 py-2 text-xs">
+                  <span class="inline-block bg-slate-100 rounded px-1.5 py-0.5" x-text="w.kind"></span>
+                </td>
+                <td class="px-3 py-2 text-xs text-slate-600">
+                  <span x-show="w.kind === 'interval'" x-text="'every ' + (w.interval_seconds/3600).toFixed(1) + 'h'"></span>
+                  <span x-show="w.kind === 'metric_threshold'"
+                        x-text="w.metric_name + ' < ' + w.threshold"></span>
+                </td>
+                <td class="px-3 py-2">
+                  <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                        :class="w.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'"
+                        x-text="w.enabled ? 'enabled' : 'disabled'"></span>
+                  <span x-show="w.consecutive_failures > 0"
+                        class="ml-1 text-xs text-rose-600"
+                        :title="'consecutive failures'"
+                        x-text="'(' + w.consecutive_failures + ' fail)'"></span>
+                </td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden md:table-cell">
+                  <span x-show="w.last_fired_at" x-text="fmtTime(w.last_fired_at)"></span>
+                  <span x-show="!w.last_fired_at" class="text-slate-400">never</span>
+                </td>
+                <td class="px-3 py-2 text-right whitespace-nowrap">
+                  <button x-show="!w.enabled"
+                          @click="enableWatch(w.id)"
+                          class="text-emerald-700 hover:underline text-xs mr-2">Enable</button>
+                  <button x-show="w.enabled"
+                          @click="disableWatch(w.id)"
+                          class="text-amber-700 hover:underline text-xs mr-2">Disable</button>
+                  <button @click="deleteWatch(w.id)"
+                          class="text-rose-600 hover:underline text-xs">Delete</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="watches.length === 0">
+              <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No watches configured.
               </td>
             </tr>
           </tbody>
@@ -723,6 +918,95 @@
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
           Apply
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Quantize model modal ─────────────────────────────────────── -->
+  <div x-show="quantizeOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="quantizeOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Quantize model</h3>
+        <button @click="quantizeOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <div class="text-slate-600">
+          Creates a new version under
+          <span class="font-mono" x-text="quantizeDraft.name"></span> with the
+          quantized adapter. This can take minutes to hours on a real model.
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">method</label>
+          <select x-model="quantizeDraft.method"
+                  class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+            <option value="awq">AWQ</option>
+            <option value="gptq">GPTQ</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">bits</label>
+          <input type="number" min="2" max="16" x-model.number="quantizeDraft.bits"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="quantizeError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="quantizeError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="quantizeOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitQuantize()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Quantize</span>
+          <span x-show="submitting">Running…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── AL queue modal ───────────────────────────────────────────── -->
+  <div x-show="alQueueOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="alQueueOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[95vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center">
+        <div class="min-w-0 flex-1">
+          <h3 class="font-semibold">Annotation queue</h3>
+          <p class="text-xs text-slate-500 font-mono" x-text="alQueueRunId"></p>
+        </div>
+        <button @click="alQueueOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="overflow-auto flex-1">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left sticky top-0">
+            <tr>
+              <th class="px-3 py-2 w-16">#</th>
+              <th class="px-3 py-2 w-24">Uncert.</th>
+              <th class="px-3 py-2">Prediction</th>
+              <th class="px-3 py-2 w-24"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="q in alQueueItems" :key="q.id">
+              <tr class="border-t" :class="q.annotated ? 'opacity-50' : ''">
+                <td class="px-3 py-2 font-mono text-xs" x-text="q.sample_index"></td>
+                <td class="px-3 py-2 font-mono text-xs" x-text="q.uncertainty.toFixed(3)"></td>
+                <td class="px-3 py-2 text-xs">
+                  <pre class="whitespace-pre-wrap" x-text="(q.prediction || '').slice(0, 240)"></pre>
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <button x-show="!q.annotated"
+                          @click="markAlItemAnnotated(q)"
+                          class="text-emerald-700 hover:underline text-xs">Done</button>
+                  <span x-show="q.annotated" class="text-emerald-700 text-xs">✓</span>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="alQueueItems.length === 0">
+              <td colspan="4" class="px-3 py-8 text-center text-slate-400 text-sm">
+                Queue empty.
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -1126,6 +1410,19 @@ function trainpipe() {
     aliasDraft: { name: '', version: 1, alias: '', model_id: '' },
     aliasError: '',
 
+    // Phase 7 follow-up: quantize modal state.
+    quantizeOpen: false,
+    quantizeDraft: { model_id: '', name: '', method: 'awq', bits: 4 },
+    quantizeError: '',
+
+    // New tabs (pipelines / active-learning / watches) data + queue modal.
+    pipelines: [],
+    alRuns: [],
+    watches: [],
+    alQueueOpen: false,
+    alQueueRunId: '',
+    alQueueItems: [],
+
     playground: {
       refA: 'base:Qwen/Qwen2.5-0.5B-Instruct',
       refB: '',
@@ -1218,6 +1515,9 @@ function trainpipe() {
         this.api('/evals/suites').then(r => this.evalSuites = r).catch(() => {}),
         this.api('/evals/runs?limit=200').then(r => this.evalRuns = r).catch(() => {}),
         this.api('/models').then(r => this.models = r).catch(() => {}),
+        this.api('/pipelines').then(r => this.pipelines = r).catch(() => {}),
+        this.api('/active-learning/runs?limit=100').then(r => this.alRuns = r).catch(() => {}),
+        this.api('/watches').then(r => this.watches = r).catch(() => {}),
       ];
       await Promise.all(tasks);
     },
@@ -1596,6 +1896,100 @@ function trainpipe() {
         }
       }
       return flat.slice(0, 3).join('  ') || '—';
+    },
+
+    // ── quantize ──────────────────────────────────────────────
+    openQuantize(model) {
+      this.quantizeError = '';
+      this.quantizeDraft = {
+        model_id: model.id,
+        name: model.name + ' v' + model.version,
+        method: 'awq',
+        bits: 4,
+      };
+      this.quantizeOpen = true;
+    },
+    async submitQuantize() {
+      this.quantizeError = '';
+      this.submitting = true;
+      try {
+        await this.api(`/models/${this.quantizeDraft.model_id}/quantize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            method: this.quantizeDraft.method,
+            bits: this.quantizeDraft.bits,
+          }),
+        });
+        this.quantizeOpen = false;
+        this.flash('Quantized — new version created');
+        this.refreshAll();
+      } catch (e) {
+        this.quantizeError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    // ── pipelines ─────────────────────────────────────────────
+    stageColor(status) {
+      return {
+        pending:   'bg-slate-100 text-slate-600',
+        queued:    'bg-amber-100 text-amber-800',
+        running:   'bg-cyan-100 text-cyan-800',
+        completed: 'bg-emerald-100 text-emerald-800',
+        failed:    'bg-rose-100 text-rose-800',
+        cancelled: 'bg-slate-200 text-slate-700',
+        skipped:   'bg-slate-100 text-slate-500',
+      }[status] || 'bg-slate-100 text-slate-600';
+    },
+    async cancelPipeline(id) {
+      if (!confirm('Cancel this pipeline?')) return;
+      try {
+        await this.api(`/pipelines/${id}/cancel`, { method: 'POST' });
+        this.flash('Cancelled');
+        this.refreshAll();
+      } catch (e) { this.flash('Cancel failed: ' + e.message); }
+    },
+
+    // ── watches ───────────────────────────────────────────────
+    async enableWatch(id) {
+      try {
+        await this.api(`/watches/${id}/enable`, { method: 'POST' });
+        this.refreshAll();
+      } catch (e) { this.flash('Enable failed: ' + e.message); }
+    },
+    async disableWatch(id) {
+      try {
+        await this.api(`/watches/${id}/disable`, { method: 'POST' });
+        this.refreshAll();
+      } catch (e) { this.flash('Disable failed: ' + e.message); }
+    },
+    async deleteWatch(id) {
+      if (!confirm('Delete this watch?')) return;
+      try {
+        await this.api(`/watches/${id}`, { method: 'DELETE' });
+        this.flash('Deleted');
+        this.refreshAll();
+      } catch (e) { this.flash('Delete failed: ' + e.message); }
+    },
+
+    // ── active learning ──────────────────────────────────────
+    async openAlQueue(run) {
+      this.alQueueRunId = run.id;
+      this.alQueueItems = [];
+      this.alQueueOpen = true;
+      try {
+        this.alQueueItems = await this.api(`/active-learning/runs/${run.id}/queue`);
+      } catch (e) { this.flash('Failed to load queue: ' + e.message); }
+    },
+    async markAlItemAnnotated(item) {
+      try {
+        await this.api(`/active-learning/runs/${item.run_id}/queue/${item.id}/annotated`, {
+          method: 'POST',
+        });
+        item.annotated = true;
+      } catch (e) { this.flash('Mark failed: ' + e.message); }
     },
 
     // ── label studio import ────────────────────────────────────

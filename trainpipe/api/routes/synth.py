@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...core import repository
 from ...core.db import Database
 from ...settings import settings
-from ...synth.runner import generate_synthetic, make_provider
+from ...synth.runner import SynthAborted, generate_synthetic, make_provider
 from ...training.dataset_formats import detect_and_validate_info
 from ...training.dataset_refs import (
     MalformedDatasetRef,
@@ -113,6 +113,21 @@ async def run_synth(
 
     try:
         written = await asyncio.to_thread(_do)
+    except SynthAborted as e:
+        # Provider was hard-down or too many consecutive failures —
+        # 502 because it's an upstream issue, not the user's request
+        # being malformed. Keep any records that succeeded before
+        # the abort so partial progress isn't lost.
+        logger.warning("synth aborted early: %s", e)
+        if not target_path.exists() or target_path.stat().st_size == 0:
+            try:
+                target_path.unlink(missing_ok=True)
+                target_dir.rmdir()
+            except OSError:
+                pass
+        raise HTTPException(
+            502, {"error": "synth_aborted", "detail": str(e)}
+        ) from None
     except Exception as e:
         logger.exception("synth run failed")
         try:

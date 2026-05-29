@@ -326,6 +326,33 @@ MIGRATIONS: list[str] = [
     ALTER TABLE experiments ADD COLUMN peak_vram_mb REAL;
     ALTER TABLE experiments ADD COLUMN energy_wh REAL;
     """,
+    # v12: watch failure bookkeeping (follow-up to Phase 17). A watch
+    # with a malformed pipeline_config used to swallow its ValueError
+    # every tick and silently spam the log forever. Now we count
+    # consecutive failures and auto-disable after a threshold.
+    """
+    ALTER TABLE watches ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE watches ADD COLUMN last_error TEXT;
+    """,
+    # v13: N-source dataset lineage (follow-up to Phase 16). The
+    # ``datasets.derived_from`` column is 1:1; a mix of two source
+    # datasets loses one parent in the audit chain. ``dataset_lineage``
+    # is N:M so mix(a, b) gets two rows pointing at both parents, and
+    # the recursive "which models trained on data ultimately derived
+    # from X" query (GDPR) returns correct results. ``role`` lets us
+    # distinguish "split-of" / "mix-of" / "redacted-from" for audit.
+    """
+    CREATE TABLE dataset_lineage (
+        derived_id TEXT NOT NULL,
+        parent_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (derived_id, parent_id),
+        FOREIGN KEY (derived_id) REFERENCES datasets(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES datasets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_lineage_parent ON dataset_lineage(parent_id);
+    """,
 ]
 
 

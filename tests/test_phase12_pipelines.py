@@ -149,6 +149,75 @@ def test_valid_linear_dag_accepted():
     _validate_dag(cfg)  # no raise
 
 
+async def test_atomic_enqueue_stage_with_experiment(db):
+    """``enqueue_stage_with_experiment`` must persist the experiment
+    *and* flip the stage to QUEUED with the new experiment_id in one
+    transaction — no orphan rows."""
+    cfg = PipelineConfig(
+        name="atomic",
+        stages=[
+            StageSpec(
+                name="solo",
+                base_spec=ExperimentSpec(model="m", dataset=["/x"]),
+            )
+        ],
+    )
+    async with db.connect() as conn:
+        pipeline_id = await repository.create_pipeline(
+            conn, name=cfg.name, config=cfg
+        )
+        exp_id = await repository.enqueue_stage_with_experiment(
+            conn,
+            pipeline_id=pipeline_id,
+            stage_name="solo",
+            spec=cfg.stages[0].base_spec,
+            output_dir="/tmp/out",
+        )
+        pipeline = await repository.get_pipeline(conn, pipeline_id)
+        exp = await repository.get_experiment(conn, exp_id)
+    stage = next(s for s in pipeline.stages if s.stage_name == "solo")
+    assert stage.experiment_id == exp_id
+    assert stage.status == StageStatus.QUEUED
+    assert stage.output_dir == "/tmp/out"
+    assert exp is not None
+    assert exp.status.value == "queued"
+
+
+async def test_atomic_enqueue_rolls_back_on_failure(db):
+    """If anything inside the transaction raises after the INSERT but
+    before COMMIT, the experiment row must be rolled back too — no
+    orphan rows."""
+    spec = ExperimentSpec(model="m", dataset=["/x"])
+    async with db.connect() as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM experiments")
+        before = (await cur.fetchone())[0]
+
+        # Wrap conn.execute so it raises on the pipeline_stages UPDATE.
+        original_execute = conn.execute
+
+        async def failing_execute(sql, *args, **kwargs):
+            if sql.lstrip().upper().startswith("UPDATE PIPELINE_STAGES"):
+                raise RuntimeError("simulated stage UPDATE failure")
+            return await original_execute(sql, *args, **kwargs)
+
+        conn.execute = failing_execute  # type: ignore[method-assign]
+        try:
+            with pytest.raises(RuntimeError, match="simulated stage"):
+                await repository.enqueue_stage_with_experiment(
+                    conn,
+                    pipeline_id="nope",
+                    stage_name="nope",
+                    spec=spec,
+                    output_dir=None,
+                )
+        finally:
+            conn.execute = original_execute  # type: ignore[method-assign]
+
+        cur = await conn.execute("SELECT COUNT(*) FROM experiments")
+        after = (await cur.fetchone())[0]
+    assert after == before, "experiment row leaked after rolled-back transaction"
+
+
 # ---------------------------------------------------------------------------
 # REST + driver smoke
 # ---------------------------------------------------------------------------

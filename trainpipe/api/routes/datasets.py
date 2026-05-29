@@ -478,6 +478,7 @@ async def split_dataset(
                 f"split from ds:{rec.id} ratio={request.ratio} side=train "
                 f"seed={request.seed}"
             ),
+            lineage_role="split-of",
         ),
         "val": await _persist_derived(
             db,
@@ -488,6 +489,7 @@ async def split_dataset(
                 f"split from ds:{rec.id} ratio={request.ratio} side=val "
                 f"seed={request.seed}"
             ),
+            lineage_role="split-of",
         ),
     }
 
@@ -558,7 +560,7 @@ async def create_mix(
             {"error": "no_records_in_sources", "detail": "all source files were empty"},
         )
 
-    parent_id = recs[0].id  # mark first source as derivation parent for traceability
+    all_parent_ids = [r.id for r in recs]
     parts_desc = ", ".join(
         f"ds:{s.dataset_id}*{s.weight}" for s in request.sources
     )
@@ -572,7 +574,11 @@ async def create_mix(
         name=request.name,
         lines=out_lines,
         provenance=provenance,
-        parent_id=parent_id,
+        # All N source ids — the legacy derived_from column gets the
+        # first parent for back-compat, and dataset_lineage gets all
+        # of them so GDPR queries return correct results.
+        parent_ids=all_parent_ids,
+        lineage_role="mix-of",
     )
 
 
@@ -584,8 +590,17 @@ async def _persist_derived(
     lines: list[str],
     provenance: str,
     parent_id: str | None = None,
+    parent_ids: list[str] | None = None,
+    lineage_role: str = "derived-from",
 ) -> Dataset:
-    """Write ``lines`` as a new JSONL dataset, register, return."""
+    """Write ``lines`` as a new JSONL dataset, register, return.
+
+    ``parent_ids``: when set, all of these are recorded in
+    ``dataset_lineage`` for the new row. The 1:1 ``datasets.derived_from``
+    column gets the first one (back-compat). Falls back to ``[parent_id
+    or parent.id]`` when not specified — that covers split / redact /
+    LS-import which only have one parent anyway.
+    """
     new_id = uuid.uuid4().hex
     target_dir = settings.datasets_dir / new_id
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -602,6 +617,10 @@ async def _persist_derived(
     size = target_path.stat().st_size
     info = detect_and_validate_info(target_path)
     digest = sha.hexdigest()
+
+    if parent_ids is None:
+        parent_ids = [parent_id or parent.id]
+    derived_from_legacy = parent_ids[0] if parent_ids else parent.id
 
     async with db.connect() as conn:
         existing = await repository.get_dataset_by_sha(conn, digest)
@@ -624,7 +643,10 @@ async def _persist_derived(
             dataset_id=new_id,
             media_kinds=info.media_kinds,
             version=parent.version + 1,
-            derived_from=parent_id or parent.id,
+            derived_from=derived_from_legacy,
+        )
+        await repository.record_dataset_lineage(
+            conn, new_id, parent_ids, role=lineage_role
         )
         rec = await repository.get_dataset(conn, new_id)
     assert rec is not None
@@ -730,6 +752,11 @@ async def redact_dataset(
             description=provenance,
             dataset_id=new_id,
             media_kinds=info.media_kinds,
+            version=rec.version + 1,
+            derived_from=rec.id,
+        )
+        await repository.record_dataset_lineage(
+            conn, new_id, [rec.id], role="redacted-from"
         )
         out = await repository.get_dataset(conn, new_id)
     assert out is not None
@@ -740,14 +767,26 @@ async def redact_dataset(
 async def models_using_dataset(
     dataset_id: str,
     db: Annotated[Database, Depends(get_db)],
+    recursive: bool = False,
 ) -> dict[str, list[str]]:
     """List the model ids that have ``dataset_id`` in their lineage —
-    the GDPR ‘which models trained on this data?’ query."""
+    the GDPR ‘which models trained on this data?’ query.
+
+    Pass ``recursive=true`` to also include models trained on datasets
+    that *derive* from ``dataset_id`` (mixes, splits, redacted copies).
+    Use this for the proper GDPR "forget" query — direct usage misses
+    indirect chains.
+    """
     async with db.connect() as conn:
         rec = await repository.get_dataset(conn, dataset_id)
         if rec is None:
             raise HTTPException(404, "dataset not found")
-        ids = await repository.models_using_dataset(conn, dataset_id)
+        if recursive:
+            ids = await repository.models_using_dataset_recursive(
+                conn, dataset_id
+            )
+        else:
+            ids = await repository.models_using_dataset(conn, dataset_id)
     return {"model_ids": ids}
 
 

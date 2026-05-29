@@ -268,6 +268,95 @@ def test_mix_unknown_source_422(state, client):
     assert r.json()["detail"]["error"] == "unknown_dataset"
 
 
+def test_mix_records_all_parents_in_lineage(state, client):
+    """The mix endpoint must record an N:M lineage row per source —
+    not just collapse to derived_from=first-parent. Otherwise the GDPR
+    recursive query misses the other sources."""
+    a_id = _upload_jsonl(client, [f"a{i}" for i in range(3)])
+    b_id = _upload_jsonl(client, [f"b{i}" for i in range(3)])
+    c_id = _upload_jsonl(client, [f"c{i}" for i in range(3)])
+    r = client.post(
+        "/datasets/mixes",
+        headers=HEADERS,
+        json={
+            "name": "tri-mix",
+            "sources": [
+                {"dataset_id": a_id, "weight": 1},
+                {"dataset_id": b_id, "weight": 1},
+                {"dataset_id": c_id, "weight": 1},
+            ],
+            "target_count": 9,
+        },
+    )
+    assert r.status_code == 201
+    mix_id = r.json()["id"]
+
+    async def _check():
+        async with state["db"].connect() as conn:
+            ancestors = await repository.dataset_ancestors(conn, mix_id)
+        return ancestors
+
+    ancestors = _run(_check())
+    assert ancestors == {a_id, b_id, c_id}
+
+
+def test_split_records_lineage(state, client):
+    src_id = _upload_jsonl(client, [f"row {i}" for i in range(10)])
+    r = client.post(
+        f"/datasets/{src_id}/split",
+        headers=HEADERS,
+        json={"ratio": "80:20", "seed": 1},
+    )
+    train_id = r.json()["train"]["id"]
+    val_id = r.json()["val"]["id"]
+
+    async def _ancestors_of(did):
+        async with state["db"].connect() as conn:
+            return await repository.dataset_ancestors(conn, did)
+
+    assert _run(_ancestors_of(train_id)) == {src_id}
+    assert _run(_ancestors_of(val_id)) == {src_id}
+
+
+def test_dataset_descendants_walk(state, client):
+    """parent → split-train → mix(split-train + other_source). The
+    descendants of the original parent should include train, val, AND
+    the mix that consumed train."""
+    parent_id = _upload_jsonl(client, [f"p{i}" for i in range(10)])
+    other_id = _upload_jsonl(client, [f"o{i}" for i in range(3)])
+
+    sp = client.post(
+        f"/datasets/{parent_id}/split",
+        headers=HEADERS,
+        json={"ratio": "70:30", "seed": 0},
+    ).json()
+    train_id = sp["train"]["id"]
+    val_id = sp["val"]["id"]
+
+    mix = client.post(
+        "/datasets/mixes",
+        headers=HEADERS,
+        json={
+            "name": "downstream-mix",
+            "sources": [
+                {"dataset_id": train_id, "weight": 1},
+                {"dataset_id": other_id, "weight": 1},
+            ],
+            "target_count": 5,
+        },
+    ).json()
+    mix_id = mix["id"]
+
+    async def _desc():
+        async with state["db"].connect() as conn:
+            return await repository.dataset_descendants(conn, parent_id)
+
+    descendants = _run(_desc())
+    assert train_id in descendants
+    assert val_id in descendants
+    assert mix_id in descendants
+
+
 def test_mix_requires_minimum_two_sources(state, client):
     a_id = _upload_jsonl(client, ["x"])
     r = client.post(

@@ -1281,6 +1281,64 @@ async def set_pipeline_status(
     await conn.commit()
 
 
+async def enqueue_stage_with_experiment(
+    conn: aiosqlite.Connection,
+    *,
+    pipeline_id: str,
+    stage_name: str,
+    spec: ExperimentSpec,
+    output_dir: str | None,
+) -> str:
+    """Create the stage's backing experiment AND flip the stage to QUEUED
+    in one transaction.
+
+    The two writes were previously split across ``create_experiment`` +
+    ``update_stage``, each committing independently — a process crash
+    between them would leave an orphan ``queued`` experiment that no
+    stage row referenced, and the driver's next tick would silently
+    spawn a second experiment for the same stage. ``BEGIN IMMEDIATE``
+    here is mostly belt-and-suspenders: aiosqlite already wraps a
+    sequence of writes in an implicit transaction, but the explicit
+    BEGIN ensures we don't pick up someone else's open write in the
+    middle.
+    """
+    experiment_id = uuid.uuid4().hex
+    now = utcnow_iso()
+    try:
+        await conn.execute("BEGIN IMMEDIATE")
+        await conn.execute(
+            "INSERT INTO experiments (id, spec_json, status, priority, "
+            "study_id, trial_number, created_at, queued_at) "
+            "VALUES (?, ?, 'queued', ?, NULL, NULL, ?, ?)",
+            (
+                experiment_id,
+                spec.model_dump_json(),
+                spec.priority,
+                now,
+                now,
+            ),
+        )
+        await conn.execute(
+            "INSERT INTO events (experiment_id, study_id, kind, "
+            "payload_json, created_at) VALUES (?, NULL, 'queued', ?, ?)",
+            (experiment_id, "{}", now),
+        )
+        await conn.execute(
+            "UPDATE pipeline_stages SET status = 'queued', "
+            "experiment_id = ?, output_dir = ? "
+            "WHERE pipeline_id = ? AND stage_name = ?",
+            (experiment_id, output_dir, pipeline_id, stage_name),
+        )
+        await conn.commit()
+    except Exception:
+        try:
+            await conn.execute("ROLLBACK")
+        except aiosqlite.Error:
+            pass
+        raise
+    return experiment_id
+
+
 async def update_stage(
     conn: aiosqlite.Connection,
     pipeline_id: str,
@@ -1333,6 +1391,13 @@ async def update_stage(
 
 
 def _row_to_watch(row: aiosqlite.Row) -> Watch:
+    def _maybe(name: str, default=None):
+        try:
+            v = row[name]
+            return default if v is None else v
+        except (KeyError, IndexError):
+            return default
+
     return Watch(
         id=row["id"],
         name=row["name"],
@@ -1353,6 +1418,8 @@ def _row_to_watch(row: aiosqlite.Row) -> Watch:
         ),
         last_fired_pipeline_id=row["last_fired_pipeline_id"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        consecutive_failures=int(_maybe("consecutive_failures", 0)),
+        last_error=_maybe("last_error", None),
     )
 
 
@@ -1426,12 +1493,42 @@ async def set_watch_enabled(
 async def record_watch_fire(
     conn: aiosqlite.Connection, watch_id: str, pipeline_id: str
 ) -> None:
+    """Mark a successful fire — resets the failure counter."""
     await conn.execute(
-        "UPDATE watches SET last_fired_at = ?, last_fired_pipeline_id = ? "
-        "WHERE id = ?",
+        "UPDATE watches SET last_fired_at = ?, last_fired_pipeline_id = ?, "
+        "consecutive_failures = 0, last_error = NULL WHERE id = ?",
         (utcnow_iso(), pipeline_id, watch_id),
     )
     await conn.commit()
+
+
+async def record_watch_failure(
+    conn: aiosqlite.Connection,
+    watch_id: str,
+    error: str,
+    *,
+    disable_threshold: int,
+) -> int:
+    """Increment the consecutive-failure counter and auto-disable once it
+    reaches ``disable_threshold``. Returns the new counter value (handy
+    for logging the disable decision)."""
+    await conn.execute(
+        "UPDATE watches SET consecutive_failures = consecutive_failures + 1, "
+        "last_error = ? WHERE id = ?",
+        (error[:1024], watch_id),
+    )
+    cur = await conn.execute(
+        "SELECT consecutive_failures FROM watches WHERE id = ?",
+        (watch_id,),
+    )
+    row = await cur.fetchone()
+    n = int(row[0]) if row else 0
+    if n >= disable_threshold:
+        await conn.execute(
+            "UPDATE watches SET enabled = 0 WHERE id = ?", (watch_id,)
+        )
+    await conn.commit()
+    return n
 
 
 async def delete_watch(conn: aiosqlite.Connection, watch_id: str) -> bool:
@@ -1481,6 +1578,114 @@ async def datasets_used_by_model(
     cur = await conn.execute(
         "SELECT dataset_id FROM model_lineage WHERE model_id = ?",
         (model_id,),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Dataset lineage (Phase 16 follow-up — N:M parent tracking)
+# ---------------------------------------------------------------------------
+
+
+async def record_dataset_lineage(
+    conn: aiosqlite.Connection,
+    derived_id: str,
+    parent_ids: list[str],
+    *,
+    role: str,
+) -> None:
+    """Insert (derived_id, parent_id) rows for each parent. Idempotent.
+
+    ``role`` is a free-form label (``split-of`` / ``mix-of`` /
+    ``redacted-from`` / ``synthesized-from``) — used in audit queries to
+    distinguish how the derivation happened.
+    """
+    now = utcnow_iso()
+    for pid in parent_ids:
+        if pid == derived_id:
+            continue  # self-loop guard
+        await conn.execute(
+            "INSERT INTO dataset_lineage (derived_id, parent_id, role, "
+            "recorded_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(derived_id, parent_id) DO NOTHING",
+            (derived_id, pid, role, now),
+        )
+    await conn.commit()
+
+
+async def dataset_ancestors(
+    conn: aiosqlite.Connection, dataset_id: str, *, max_depth: int = 32
+) -> set[str]:
+    """All ancestors of ``dataset_id`` (transitive parents).
+
+    Walks ``dataset_lineage`` BFS-style. ``max_depth`` is a cycle-safety
+    cap (the table allows cycles in principle — we never create them,
+    but a corrupt row shouldn't hang the audit query). Returns a set of
+    dataset ids; ``dataset_id`` itself is NOT included.
+    """
+    seen: set[str] = set()
+    frontier = {dataset_id}
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        placeholders = ",".join("?" for _ in frontier)
+        cur = await conn.execute(
+            f"SELECT parent_id FROM dataset_lineage WHERE derived_id IN ({placeholders})",
+            tuple(frontier),
+        )
+        rows = await cur.fetchall()
+        next_frontier = {r[0] for r in rows} - seen - {dataset_id}
+        seen.update(next_frontier)
+        frontier = next_frontier
+    return seen
+
+
+async def dataset_descendants(
+    conn: aiosqlite.Connection, dataset_id: str, *, max_depth: int = 32
+) -> set[str]:
+    """All descendants of ``dataset_id`` (transitive children).
+
+    The reverse of :func:`dataset_ancestors`. Used to answer
+    "the user asked to forget data in dataset X — which derived
+    datasets also need to be redacted?"
+    """
+    seen: set[str] = set()
+    frontier = {dataset_id}
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        placeholders = ",".join("?" for _ in frontier)
+        cur = await conn.execute(
+            f"SELECT derived_id FROM dataset_lineage WHERE parent_id IN ({placeholders})",
+            tuple(frontier),
+        )
+        rows = await cur.fetchall()
+        next_frontier = {r[0] for r in rows} - seen - {dataset_id}
+        seen.update(next_frontier)
+        frontier = next_frontier
+    return seen
+
+
+async def models_using_dataset_recursive(
+    conn: aiosqlite.Connection, dataset_id: str
+) -> list[str]:
+    """All models whose training data ultimately derives from ``dataset_id``.
+
+    GDPR-relevant: ``models_using_dataset`` only catches direct usage,
+    so a model trained on a mix or split of ``dataset_id`` would slip
+    through. This walks ``dataset_descendants`` first, then unions all
+    matching ``model_lineage`` rows. Returns deduplicated model ids.
+    """
+    descendants = await dataset_descendants(conn, dataset_id)
+    candidates = descendants | {dataset_id}
+    if not candidates:
+        return []
+    placeholders = ",".join("?" for _ in candidates)
+    cur = await conn.execute(
+        f"SELECT DISTINCT model_id FROM model_lineage "
+        f"WHERE dataset_id IN ({placeholders})",
+        tuple(candidates),
     )
     rows = await cur.fetchall()
     return [r[0] for r in rows]

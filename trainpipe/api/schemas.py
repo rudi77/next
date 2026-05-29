@@ -574,3 +574,10 @@ class Watch(BaseModel):
     last_fired_at: datetime | None = None
     last_fired_pipeline_id: str | None = None
     created_at: datetime
+    # Auto-disable bookkeeping (migration v12). Reset to 0 on a
+    # successful fire; bumped on each fire attempt that raised. Once
+    # it reaches WatchManager.failure_disable_threshold the watch
+    # flips ``enabled = False`` automatically and the operator has
+    # to /enable it after fixing the config.
+    consecutive_failures: int = 0
+    last_error: str | None = None

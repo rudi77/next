@@ -166,15 +166,11 @@ class PipelineDriver:
                     spec_template, by_name
                 )
                 async with self.db.connect() as conn:
-                    exp_id = await repository.create_experiment(
-                        conn, materialized
-                    )
-                    await repository.update_stage(
+                    exp_id = await repository.enqueue_stage_with_experiment(
                         conn,
-                        self.pipeline_id,
-                        stage.stage_name,
-                        status=StageStatus.QUEUED,
-                        experiment_id=exp_id,
+                        pipeline_id=self.pipeline_id,
+                        stage_name=stage.stage_name,
+                        spec=materialized,
                         output_dir=materialized.output_dir,
                     )
                 logger.info(

@@ -27,8 +27,9 @@ class PipelineManager:
     async def start_existing(self) -> None:
         async with self.db.connect() as conn:
             actives = await repository.list_active_pipelines(conn)
-        for p in actives:
-            self._start_driver(p.id)
+        async with self._lock:
+            for p in actives:
+                self._start_driver_locked(p.id)
 
     async def create_and_start(
         self, name: str, config: PipelineConfig
@@ -38,7 +39,8 @@ class PipelineManager:
             pipeline_id = await repository.create_pipeline(
                 conn, name=name, config=config
             )
-        self._start_driver(pipeline_id)
+        async with self._lock:
+            self._start_driver_locked(pipeline_id)
         return pipeline_id
 
     async def cancel(self, pipeline_id: str) -> bool:
@@ -69,7 +71,14 @@ class PipelineManager:
             *(d.stop() for d in drivers), return_exceptions=True
         )
 
-    def _start_driver(self, pipeline_id: str) -> None:
+    def _start_driver_locked(self, pipeline_id: str) -> None:
+        """Caller must hold ``self._lock``."""
+        if pipeline_id in self._drivers:
+            # Already started — calling start() twice on the same driver
+            # is harmless but the race we're guarding against is two
+            # concurrent ``create_and_start`` calls observing the same
+            # missing entry and each instantiating a separate driver.
+            return
         driver = PipelineDriver(pipeline_id, self.db)
         driver.start()
         self._drivers[pipeline_id] = driver

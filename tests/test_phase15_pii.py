@@ -246,6 +246,73 @@ async def test_register_model_records_lineage(db, tmp_path):
     assert ds_id in datasets_for_model
 
 
+def test_models_using_dataset_recursive_finds_mix_descendants(state, client):
+    """The proper GDPR query: model trained on mix(parent, other) must
+    show up when querying for ``parent``'s downstream models."""
+    # Upload two source datasets.
+    parent_id = _upload_jsonl(
+        client,
+        json.dumps({"x": 1}) + "\n",
+        name="gdpr-parent",
+    )
+    other_id = _upload_jsonl(
+        client,
+        json.dumps({"y": 2}) + "\n",
+        name="gdpr-other",
+    )
+
+    # Mix them — the mix consumes both.
+    mix = client.post(
+        "/datasets/mixes",
+        headers=HEADERS,
+        json={
+            "name": "mix-for-gdpr",
+            "sources": [
+                {"dataset_id": parent_id, "weight": 1},
+                {"dataset_id": other_id, "weight": 1},
+            ],
+            "target_count": 2,
+        },
+    ).json()
+    mix_id = mix["id"]
+
+    # Create a completed experiment that trained on the *mix*, then
+    # register it as a model. The direct query for ``parent_id`` should
+    # NOT find this model — but the recursive query SHOULD.
+    async def _make_exp_on_mix():
+        async with state["db"].connect() as conn:
+            mix_rec = await repository.get_dataset(conn, mix_id)
+            spec = ExperimentSpec(model="m", dataset=[mix_rec.path])
+            exp_id = await repository.create_experiment(conn, spec)
+            await conn.execute(
+                "UPDATE experiments SET status='completed' WHERE id=?",
+                (exp_id,),
+            )
+            await conn.commit()
+            return exp_id
+
+    exp_id = _run(_make_exp_on_mix())
+    r = client.post(
+        "/models",
+        headers=HEADERS,
+        json={"name": "fam", "experiment_id": exp_id},
+    )
+    assert r.status_code == 201
+    model_id = r.json()["id"]
+
+    # Direct query for the parent: no models trained on it directly.
+    direct = client.get(
+        f"/datasets/{parent_id}/models", headers=HEADERS
+    ).json()
+    assert model_id not in direct["model_ids"]
+
+    # Recursive query: model_id IS found via parent → mix → model.
+    recursive = client.get(
+        f"/datasets/{parent_id}/models?recursive=true", headers=HEADERS
+    ).json()
+    assert model_id in recursive["model_ids"]
+
+
 def test_models_using_dataset_endpoint(state, client):
     """The GET /datasets/{id}/models endpoint must surface lineage."""
 

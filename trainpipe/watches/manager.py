@@ -31,10 +31,16 @@ class WatchManager:
         pipeline_manager: PipelineManager,
         *,
         poll_interval_sec: float = 30.0,
+        failure_disable_threshold: int = 5,
     ) -> None:
         self.db = db
         self.pipelines = pipeline_manager
         self.poll_interval_sec = poll_interval_sec
+        # A watch with a malformed pipeline_config used to spam the log
+        # every tick forever. After this many consecutive ``_fire``
+        # failures the watch is auto-disabled so the operator can fix
+        # the config and ``POST /watches/{id}/enable``.
+        self.failure_disable_threshold = failure_disable_threshold
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
 
@@ -126,10 +132,23 @@ class WatchManager:
             pipeline_id = await self.pipelines.create_and_start(
                 f"watch:{watch.name}", watch.pipeline_config
             )
-        except Exception:
+        except Exception as e:
             logger.exception(
                 "watches: failed to spawn pipeline for watch=%s", watch.id
             )
+            async with self.db.connect() as conn:
+                n = await repository.record_watch_failure(
+                    conn,
+                    watch.id,
+                    f"{type(e).__name__}: {e}",
+                    disable_threshold=self.failure_disable_threshold,
+                )
+            if n >= self.failure_disable_threshold:
+                logger.warning(
+                    "watches: auto-disabled %s after %d consecutive failures",
+                    watch.id,
+                    n,
+                )
             return
         async with self.db.connect() as conn:
             await repository.record_watch_fire(conn, watch.id, pipeline_id)
