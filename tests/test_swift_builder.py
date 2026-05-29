@@ -36,9 +36,9 @@ def test_argv_contains_core_flags():
     )
     argv, env = build_swift_command(spec, gpu_ids=[0, 1], output_dir=Path("/out"))
     assert argv[0:2] == ["swift", "sft"]
-    assert _argv_pair(argv, "--model_id_or_path") == "qwen/Qwen2-VL-2B-Instruct"
+    assert _argv_pair(argv, "--model") == "qwen/Qwen2-VL-2B-Instruct"
     assert _argv_pair(argv, "--model_type") == "qwen2-vl"
-    assert _argv_pair(argv, "--sft_type") == "lora"
+    assert _argv_pair(argv, "--tuner_type") == "lora"
     assert _all_values(argv, "--dataset") == ["d1", "d2"]
     assert _all_values(argv, "--val_dataset") == ["v1"]
     assert _argv_pair(argv, "--num_train_epochs") == "3"
@@ -72,14 +72,14 @@ def test_full_finetune_omits_lora_flags():
     argv, _ = build_swift_command(spec, gpu_ids=[0], output_dir=Path("/o"))
     assert "--lora_rank" not in argv
     assert "--lora_alpha" not in argv
-    assert "--lora_target_modules" not in argv
+    assert "--target_modules" not in argv
 
 
-def test_lora_target_modules_emitted_per_value():
+def test_target_modules_emitted_per_value():
     spec = ExperimentSpec(model="m", dataset=["d"], sft_type="lora")
     spec.hyperparameters.lora_target_modules = ["q_proj", "k_proj", "v_proj"]
     argv, _ = build_swift_command(spec, gpu_ids=[0], output_dir=Path("/o"))
-    assert _all_values(argv, "--lora_target_modules") == ["q_proj", "k_proj", "v_proj"]
+    assert _all_values(argv, "--target_modules") == ["q_proj", "k_proj", "v_proj"]
 
 
 def test_extra_args_dispatched_correctly():

@@ -23,10 +23,12 @@ def build_swift_command(
 
     argv: list[str] = ["swift", "sft"]
 
-    argv += ["--model_id_or_path", spec.model]
+    # ms-swift v4 renamed --model_id_or_path → --model, --sft_type → --tuner_type
+    # (and --lora_target_modules → --target_modules below).
+    argv += ["--model", spec.model]
     if spec.model_type:
         argv += ["--model_type", spec.model_type]
-    argv += ["--sft_type", spec.sft_type]
+    argv += ["--tuner_type", spec.sft_type]
 
     for ds in spec.dataset:
         argv += ["--dataset", ds]
@@ -54,7 +56,7 @@ def build_swift_command(
         argv += ["--lora_alpha", str(hp.lora_alpha)]
         argv += ["--lora_dropout", str(hp.lora_dropout)]
         for tm in hp.lora_target_modules:
-            argv += ["--lora_target_modules", tm]
+            argv += ["--target_modules", tm]
 
     argv += ["--output_dir", str(output_dir)]
     argv += ["--report_to", "mlflow"]
