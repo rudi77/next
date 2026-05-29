@@ -8,7 +8,7 @@ from ..core.db import Database
 from ..scheduler.gpu_pool import GpuPool, detect_gpus
 from ..scheduler.loop import Scheduler
 from ..settings import settings
-from .routes import experiments, gpus, studies
+from .routes import datasets, experiments, gpus, studies
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.logs_dir.mkdir(parents=True, exist_ok=True)
     settings.output_base_dir.mkdir(parents=True, exist_ok=True)
+    settings.datasets_dir.mkdir(parents=True, exist_ok=True)
 
     db = Database(settings.sqlite_path)
     await db.init()
@@ -57,3 +58,4 @@ async def health() -> dict[str, str]:
 app.include_router(experiments.router)
 app.include_router(gpus.router)
 app.include_router(studies.router)
+app.include_router(datasets.router)

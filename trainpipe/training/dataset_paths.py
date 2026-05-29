@@ -38,6 +38,9 @@ def looks_like_local_path(raw: str) -> bool:
     core = _strip_subsample(raw).strip()
     if not core:
         return False
+    # Dataset references (ds:<id>) are resolved to real paths separately.
+    if core.startswith("ds:"):
+        return False
     if core.startswith(("/", "./", "../", "~/", "~\\")):
         return True
     # Windows-style absolute (C:\... or C:/...)

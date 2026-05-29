@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     poll_interval_sec: float = 1.0
     heartbeat_interval_sec: float = 5.0
 
+    # Maximum size for an uploaded dataset file. Default: 5 GiB.
+    max_dataset_upload_bytes: int = 5 * 1024 * 1024 * 1024
+
     @property
     def sqlite_path(self) -> Path:
         return self.data_dir / "trainpipe.sqlite3"
@@ -33,6 +36,10 @@ class Settings(BaseSettings):
     @property
     def output_base_dir(self) -> Path:
         return self.data_dir / "outputs"
+
+    @property
+    def datasets_dir(self) -> Path:
+        return self.data_dir / "datasets"
 
 
 settings = Settings()

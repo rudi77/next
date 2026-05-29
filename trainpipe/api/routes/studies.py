@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ...autoresearch.manager import StudyManager
 from ...core import repository
 from ...core.db import Database
+from ...training.dataset_refs import UnknownDatasetRef, resolve_spec
 from ..auth import require_api_key
 from ..deps import get_db, get_study_manager
 from ..schemas import StudyConfig, StudyRecord
@@ -20,8 +21,19 @@ router = APIRouter(
 @router.post("", status_code=201)
 async def create_study(
     config: StudyConfig,
+    db: Annotated[Database, Depends(get_db)],
     manager: Annotated[StudyManager, Depends(get_study_manager)],
 ) -> dict[str, str]:
+    # Resolve ds:<id> refs in the base spec before kicking off trials.
+    async with db.connect() as conn:
+        try:
+            resolved_base = await resolve_spec(config.base_spec, conn)
+        except UnknownDatasetRef as e:
+            raise HTTPException(
+                422,
+                {"error": "unknown_dataset_ref", "ref_id": e.ref_id},
+            ) from None
+    config = config.model_copy(update={"base_spec": resolved_base})
     enforce_dataset_paths_exist([config.base_spec])
     study_id = await manager.create_and_start(config)
     return {"study_id": study_id}

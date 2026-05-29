@@ -317,6 +317,98 @@ def test_val_dataset_missing_path_reported(state, client, tmp_path):
     assert fields == {"val_dataset"}
 
 
+def test_upload_dataset_jsonl(state, client, tmp_path, monkeypatch):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    content = b'{"messages":[{"role":"user","content":"hi"}]}\n'
+    r = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("train.jsonl", content, "application/x-ndjson")},
+        data={"name": "alpaca-tiny"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "alpaca-tiny"
+    assert body["format"] == "jsonl"
+    assert body["line_count"] == 1
+    assert body["size_bytes"] == len(content)
+
+
+def test_upload_rejects_bad_jsonl(state, client, tmp_path, monkeypatch):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    r = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("bad.jsonl", b"{not json}\n", "application/x-ndjson")},
+        data={"name": "bad"},
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["error"] == "invalid_dataset_format"
+
+
+def test_submit_with_dataset_ref_resolves_to_path(
+    state, client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    # Upload first
+    r = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("t.jsonl", b'{"a":1}\n', "application/x-ndjson")},
+        data={"name": "t"},
+    )
+    assert r.status_code == 201
+    ds_id = r.json()["id"]
+
+    # Submit referring to the dataset by id
+    r = client.post(
+        "/experiments",
+        headers=HEADERS,
+        json={"model": "m", "dataset": [f"ds:{ds_id}#5"]},
+    )
+    assert r.status_code == 201, r.text
+    exp_id = r.json()["experiment_id"]
+
+    # Stored spec should have the resolved path with the #5 suffix
+    detail = client.get(f"/experiments/{exp_id}", headers=HEADERS).json()
+    paths = detail["spec"]["dataset"]
+    assert len(paths) == 1
+    assert paths[0].endswith("t.jsonl#5")
+    assert "ds:" not in paths[0]
+
+
+def test_submit_unknown_ds_ref_returns_422(state, client):
+    r = client.post(
+        "/experiments",
+        headers=HEADERS,
+        json={"model": "m", "dataset": ["ds:deadbeef99"]},
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["error"] == "unknown_dataset_ref"
+
+
+def test_list_and_delete_dataset(state, client, tmp_path, monkeypatch):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    r = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("x.jsonl", b'{"a":1}\n', "application/x-ndjson")},
+        data={"name": "x"},
+    )
+    ds_id = r.json()["id"]
+
+    r = client.get("/datasets", headers=HEADERS)
+    assert r.status_code == 200
+    assert any(d["id"] == ds_id for d in r.json())
+
+    r = client.delete(f"/datasets/{ds_id}", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True}
+
+    r = client.get(f"/datasets/{ds_id}", headers=HEADERS)
+    assert r.status_code == 404
+
+
 def test_create_study_validates_base_spec_dataset(state, client, tmp_path):
     bad = str(tmp_path / "absent.jsonl")
     r = client.post(

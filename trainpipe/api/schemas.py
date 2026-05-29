@@ -131,3 +131,18 @@ class StudyRecord(BaseModel):
     best_trial_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+DatasetFormat = Literal["jsonl", "json", "csv", "tsv", "parquet"]
+
+
+class Dataset(BaseModel):
+    id: str
+    name: str
+    path: str
+    format: DatasetFormat
+    line_count: int | None = None
+    size_bytes: int
+    sha256: str
+    description: str | None = None
+    created_at: datetime

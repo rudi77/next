@@ -5,7 +5,14 @@ async def test_init_creates_expected_tables(db):
         )
         rows = await cur.fetchall()
     names = [r[0] for r in rows]
-    for table in ("experiments", "studies", "gpu_leases", "events", "schema_version"):
+    for table in (
+        "experiments",
+        "studies",
+        "gpu_leases",
+        "events",
+        "datasets",
+        "schema_version",
+    ):
         assert table in names, f"missing table: {table}"
 
 
@@ -13,9 +20,13 @@ async def test_init_is_idempotent(db):
     # Running init() again must not raise or duplicate migrations.
     await db.init()
     async with db.connect() as conn:
-        cur = await conn.execute("SELECT MAX(version) FROM schema_version")
+        cur = await conn.execute("SELECT COUNT(*), MAX(version) FROM schema_version")
         row = await cur.fetchone()
-    assert row[0] == 1
+    # Number of recorded versions equals number of migrations defined.
+    from trainpipe.core.db import MIGRATIONS
+
+    assert row[0] == len(MIGRATIONS)
+    assert row[1] == len(MIGRATIONS)
 
 
 async def test_wal_mode_enabled(db):

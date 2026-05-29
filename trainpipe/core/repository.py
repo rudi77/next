@@ -13,6 +13,7 @@ from typing import Any
 import aiosqlite
 
 from ..api.schemas import (
+    Dataset,
     ExperimentRecord,
     ExperimentSpec,
     ExperimentStatus,
@@ -251,3 +252,81 @@ async def set_study_status(
         (status.value, utcnow_iso(), study_id),
     )
     await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Datasets
+# ---------------------------------------------------------------------------
+
+
+def _row_to_dataset(row: aiosqlite.Row) -> Dataset:
+    return Dataset(
+        id=row["id"],
+        name=row["name"],
+        path=row["path"],
+        format=row["format"],
+        line_count=row["line_count"],
+        size_bytes=row["size_bytes"],
+        sha256=row["sha256"],
+        description=row["description"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+async def create_dataset(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    path: str,
+    fmt: str,
+    size_bytes: int,
+    sha256: str,
+    line_count: int | None = None,
+    description: str | None = None,
+    dataset_id: str | None = None,
+) -> str:
+    if dataset_id is None:
+        dataset_id = uuid.uuid4().hex
+    await conn.execute(
+        "INSERT INTO datasets (id, name, path, format, line_count, size_bytes, "
+        "sha256, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            dataset_id,
+            name,
+            path,
+            fmt,
+            line_count,
+            size_bytes,
+            sha256,
+            description,
+            utcnow_iso(),
+        ),
+    )
+    await conn.commit()
+    return dataset_id
+
+
+async def get_dataset(conn: aiosqlite.Connection, dataset_id: str) -> Dataset | None:
+    cur = await conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,))
+    row = await cur.fetchone()
+    return _row_to_dataset(row) if row else None
+
+
+async def get_dataset_by_sha(
+    conn: aiosqlite.Connection, sha256: str
+) -> Dataset | None:
+    cur = await conn.execute("SELECT * FROM datasets WHERE sha256 = ? LIMIT 1", (sha256,))
+    row = await cur.fetchone()
+    return _row_to_dataset(row) if row else None
+
+
+async def list_datasets(conn: aiosqlite.Connection) -> list[Dataset]:
+    cur = await conn.execute("SELECT * FROM datasets ORDER BY created_at DESC")
+    rows = await cur.fetchall()
+    return [_row_to_dataset(r) for r in rows]
+
+
+async def delete_dataset(conn: aiosqlite.Connection, dataset_id: str) -> bool:
+    cur = await conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+    await conn.commit()
+    return cur.rowcount > 0

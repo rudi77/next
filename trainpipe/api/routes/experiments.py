@@ -8,6 +8,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ...core import repository
 from ...core.db import Database
+from ...training.dataset_refs import UnknownDatasetRef, resolve_spec
 from ..auth import require_api_key
 from ..deps import get_db, get_scheduler
 from ..schemas import ExperimentRecord, ExperimentSpec, ExperimentStatus
@@ -27,14 +28,32 @@ _TERMINAL = {
 }
 
 
+async def _resolve_and_validate(
+    specs: list[ExperimentSpec], db: Database
+) -> list[ExperimentSpec]:
+    """Replace ``ds:<id>`` refs with real paths and validate the result."""
+    resolved: list[ExperimentSpec] = []
+    async with db.connect() as conn:
+        for spec in specs:
+            try:
+                resolved.append(await resolve_spec(spec, conn))
+            except UnknownDatasetRef as e:
+                raise HTTPException(
+                    422,
+                    {"error": "unknown_dataset_ref", "ref_id": e.ref_id},
+                ) from None
+    enforce_dataset_paths_exist(resolved)
+    return resolved
+
+
 @router.post("", status_code=201)
 async def submit(
     spec: ExperimentSpec,
     db: Annotated[Database, Depends(get_db)],
 ) -> dict[str, str]:
-    enforce_dataset_paths_exist([spec])
+    (resolved_spec,) = await _resolve_and_validate([spec], db)
     async with db.connect() as conn:
-        experiment_id = await repository.create_experiment(conn, spec)
+        experiment_id = await repository.create_experiment(conn, resolved_spec)
     return {"experiment_id": experiment_id}
 
 
@@ -45,10 +64,10 @@ async def submit_batch(
 ) -> dict[str, list[str]]:
     if not specs:
         raise HTTPException(422, "specs must contain at least one item")
-    enforce_dataset_paths_exist(specs)
+    resolved = await _resolve_and_validate(specs, db)
     ids: list[str] = []
     async with db.connect() as conn:
-        for s in specs:
+        for s in resolved:
             ids.append(await repository.create_experiment(conn, s))
     return {"experiment_ids": ids}
 

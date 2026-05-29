@@ -61,6 +61,22 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_events_exp ON events(experiment_id, created_at);
     """,
+    # v2: datasets registry
+    """
+    CREATE TABLE datasets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        format TEXT NOT NULL,
+        line_count INTEGER,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_datasets_name ON datasets(name);
+    CREATE INDEX idx_datasets_sha ON datasets(sha256);
+    """,
 ]
 
 
