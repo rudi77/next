@@ -6,6 +6,7 @@ from trainpipe.api.schemas import ExperimentSpec
 from trainpipe.core import repository
 from trainpipe.core.db import Database
 from trainpipe.training.dataset_refs import (
+    MalformedDatasetRef,
     UnknownDatasetRef,
     is_ref,
     parse_ref,
@@ -111,6 +112,31 @@ def test_resolve_spec_unknown_ref_raises(tmp_path):
     with pytest.raises(UnknownDatasetRef) as exc:
         asyncio.run(go())
     assert exc.value.ref_id == "deadbeef"
+
+
+def test_resolve_spec_malformed_ref_raises(tmp_path):
+    async def go():
+        db = Database(tmp_path / "t.sqlite3")
+        await db.init()
+        async with db.connect() as conn:
+            # No hex after `ds:` → not a valid ref. Better to reject than
+            # silently pass "ds:" through to the trainer.
+            await resolve_spec(_spec(["ds:"]), conn)
+
+    with pytest.raises(MalformedDatasetRef) as exc:
+        asyncio.run(go())
+    assert exc.value.raw == "ds:"
+
+
+def test_resolve_spec_rejects_ds_with_non_hex(tmp_path):
+    async def go():
+        db = Database(tmp_path / "t.sqlite3")
+        await db.init()
+        async with db.connect() as conn:
+            await resolve_spec(_spec(["ds:not-hex!"]), conn)
+
+    with pytest.raises(MalformedDatasetRef):
+        asyncio.run(go())
 
 
 def test_resolve_spec_resolves_val_dataset_too(tmp_path):

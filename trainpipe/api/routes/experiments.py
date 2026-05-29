@@ -8,7 +8,11 @@ from sse_starlette.sse import EventSourceResponse
 
 from ...core import repository
 from ...core.db import Database
-from ...training.dataset_refs import UnknownDatasetRef, resolve_spec
+from ...training.dataset_refs import (
+    MalformedDatasetRef,
+    UnknownDatasetRef,
+    resolve_spec,
+)
 from ..auth import require_api_key
 from ..deps import get_db, get_scheduler
 from ..schemas import ExperimentRecord, ExperimentSpec, ExperimentStatus
@@ -41,6 +45,11 @@ async def _resolve_and_validate(
                 raise HTTPException(
                     422,
                     {"error": "unknown_dataset_ref", "ref_id": e.ref_id},
+                ) from None
+            except MalformedDatasetRef as e:
+                raise HTTPException(
+                    422,
+                    {"error": "malformed_dataset_ref", "value": e.raw},
                 ) from None
     enforce_dataset_paths_exist(resolved)
     return resolved

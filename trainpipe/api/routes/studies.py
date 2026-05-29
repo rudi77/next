@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from ...autoresearch.manager import StudyManager
 from ...core import repository
 from ...core.db import Database
-from ...training.dataset_refs import UnknownDatasetRef, resolve_spec
+from ...training.dataset_refs import (
+    MalformedDatasetRef,
+    UnknownDatasetRef,
+    resolve_spec,
+)
 from ..auth import require_api_key
 from ..deps import get_db, get_study_manager
 from ..schemas import StudyConfig, StudyRecord
@@ -32,6 +36,11 @@ async def create_study(
             raise HTTPException(
                 422,
                 {"error": "unknown_dataset_ref", "ref_id": e.ref_id},
+            ) from None
+        except MalformedDatasetRef as e:
+            raise HTTPException(
+                422,
+                {"error": "malformed_dataset_ref", "value": e.raw},
             ) from None
     config = config.model_copy(update={"base_spec": resolved_base})
     enforce_dataset_paths_exist([config.base_spec])

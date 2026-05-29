@@ -22,6 +22,12 @@ class UnknownDatasetRef(ValueError):
         self.ref_id = ref_id
 
 
+class MalformedDatasetRef(ValueError):
+    def __init__(self, raw: str) -> None:
+        super().__init__(f"malformed dataset reference: {raw!r}")
+        self.raw = raw
+
+
 def parse_ref(s: str) -> tuple[str, str] | None:
     """Return ``(dataset_id, suffix)`` or None if ``s`` is not a ref."""
     m = _REF.match(s)
@@ -41,6 +47,10 @@ async def _resolve_list(
     for raw in items:
         parsed = parse_ref(raw)
         if parsed is None:
+            if raw.startswith("ds:"):
+                # Looked like a ref but didn't match — better to reject
+                # than to pass garbage through to ms-swift.
+                raise MalformedDatasetRef(raw)
             out.append(raw)
             continue
         ds_id, suffix = parsed
