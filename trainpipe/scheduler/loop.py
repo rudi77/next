@@ -18,8 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import aiosqlite
-
 from ..api.schemas import ExperimentSpec
 from ..core import repository
 from ..core.db import Database
@@ -332,6 +330,25 @@ class Scheduler:
                     "WHERE id = ?",
                     (status, _utcnow_iso(), error, experiment_id),
                 )
+                # Phase 20: compute gpu_seconds = gpu_count * wall_clock.
+                exp_for_cost = await repository.get_experiment(
+                    conn, experiment_id
+                )
+                if (
+                    exp_for_cost is not None
+                    and exp_for_cost.started_at
+                    and exp_for_cost.finished_at
+                    and exp_for_cost.gpu_ids
+                ):
+                    wall = (
+                        exp_for_cost.finished_at - exp_for_cost.started_at
+                    ).total_seconds()
+                    gpu_sec = wall * len(exp_for_cost.gpu_ids)
+                    await repository.set_experiment_resource_usage(
+                        conn,
+                        experiment_id,
+                        gpu_seconds=gpu_sec,
+                    )
                 await repository.log_event(
                     conn,
                     experiment_id=experiment_id,

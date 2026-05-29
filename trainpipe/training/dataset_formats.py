@@ -14,6 +14,7 @@ the file is obviously garbage (wrong extension, broken JSON, empty file).
 
 import csv
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _SAMPLE_LINES = 100
@@ -23,31 +24,72 @@ class DatasetFormatError(ValueError):
     """Raised when the uploaded file doesn't parse as its declared format."""
 
 
-def detect_and_validate(path: Path) -> tuple[str, int | None]:
-    """Return ``(format, line_count)`` for the file at ``path``.
+@dataclass
+class FormatInfo:
+    """Result of dataset format detection."""
 
-    ``line_count`` is None for binary/columnar formats where lines are not
-    meaningful (parquet).
+    format: str
+    line_count: int | None = None
+    # JSONL only: ordered list of media kinds detected by sampling
+    # (``["images"]``, ``["images", "videos"]``, etc.). Empty for text-only.
+    media_kinds: list[str] = field(default_factory=list)
+    # JSONL only: True if every sampled record has ``prompt`` /
+    # ``chosen`` / ``rejected`` keys — that's the DPO / preference shape
+    # that ``swift rlhf`` expects (Phase 13). Detection is sample-based
+    # so a partially-converted dataset returns False.
+    is_preference: bool = False
+
+
+def detect_and_validate(path: Path) -> tuple[str, int | None]:
+    """Backward-compatible: ``(format, line_count)`` for ``path``.
+
+    For multimodal-aware code use :func:`detect_and_validate_info` instead
+    — it returns a :class:`FormatInfo` with the sniffed media kinds.
+    """
+    info = detect_and_validate_info(path)
+    return info.format, info.line_count
+
+
+def detect_and_validate_info(path: Path) -> FormatInfo:
+    """Return :class:`FormatInfo` for ``path``.
+
+    JSONL inputs are sampled to detect ``images`` / ``videos`` fields
+    (Phase 9 multimodal). Other formats return only ``format`` + line
+    count; multimodality isn't a JSONL-only restriction but our trainers
+    only consume multimodal samples from JSONL today.
     """
     suffix = path.suffix.lower().lstrip(".")
     if suffix in ("jsonl", "ndjson"):
-        return "jsonl", _validate_jsonl(path)
+        line_count, media_kinds, is_preference = _validate_jsonl(path)
+        return FormatInfo(
+            "jsonl",
+            line_count,
+            media_kinds=media_kinds,
+            is_preference=is_preference,
+        )
     if suffix == "json":
-        return "json", _validate_json(path)
+        return FormatInfo("json", _validate_json(path))
     if suffix == "csv":
-        return "csv", _validate_delimited(path, ",")
+        return FormatInfo("csv", _validate_delimited(path, ","))
     if suffix == "tsv":
-        return "tsv", _validate_delimited(path, "\t")
+        return FormatInfo("tsv", _validate_delimited(path, "\t"))
     if suffix == "parquet":
         _validate_parquet(path)
-        return "parquet", None
+        return FormatInfo("parquet", None)
     raise DatasetFormatError(
         f"unsupported extension '.{suffix}'. supported: jsonl, json, csv, tsv, parquet"
     )
 
 
-def _validate_jsonl(path: Path) -> int:
+_MEDIA_FIELDS = ("images", "videos", "audios")
+_PREFERENCE_FIELDS = ("prompt", "chosen", "rejected")
+
+
+def _validate_jsonl(path: Path) -> tuple[int, list[str], bool]:
     total = 0
+    seen_media: set[str] = set()
+    sampled = 0
+    preference_hits = 0
     with path.open("r", encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
             line = raw.strip()
@@ -55,15 +97,33 @@ def _validate_jsonl(path: Path) -> int:
                 continue
             if lineno <= _SAMPLE_LINES:
                 try:
-                    json.loads(line)
+                    record = json.loads(line)
                 except json.JSONDecodeError as e:
                     raise DatasetFormatError(
                         f"jsonl line {lineno} is not valid JSON: {e}"
                     ) from None
+                if isinstance(record, dict):
+                    sampled += 1
+                    for kind in _MEDIA_FIELDS:
+                        v = record.get(kind)
+                        if isinstance(v, list) and v:
+                            seen_media.add(kind)
+                    if all(
+                        isinstance(record.get(k), str) and record.get(k)
+                        for k in _PREFERENCE_FIELDS
+                    ):
+                        preference_hits += 1
             total += 1
     if total == 0:
         raise DatasetFormatError("jsonl file is empty")
-    return total
+    # Preference shape only if *every* sampled record matches — a mixed
+    # file is almost always a sign of accidental concatenation.
+    is_preference = sampled > 0 and preference_hits == sampled
+    return (
+        total,
+        [k for k in _MEDIA_FIELDS if k in seen_media],
+        is_preference,
+    )
 
 
 def _validate_json(path: Path) -> int:

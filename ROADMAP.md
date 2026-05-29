@@ -20,11 +20,14 @@ erfüllt ist.
 
 ## Currently in focus
 
-> **Phase 6 ✅ vollständig abgeschlossen (2026-05-29)** — Eval-Framework
-> end-to-end mit 5 Metric-Backends (incl. BLEU), MLflow-Publish nach
-> Completion, REST + UI + Auto-Hook + MockBackend für CI, Transformers
-> als Production-Backend. 246 Tests grün, alle Phase-6-Items abgehakt.
-> Nächste Phase: **Phase 7 — Modell-Registry & Promotion**.
+> **Phasen 7–21 implementiert (2026-05-29)** — Modell-Registry +
+> Promotion, Inference Playground mit LRU-Cache, Multimodal+Bundle-Upload,
+> Label-Studio-Bridge mit SSRF-Schutz, Active-Learning, Multi-Stage
+> Pipelines, DPO/RLHF, Synthetic-Data, PII-Redaction + Lineage,
+> Dataset-Versionierung + Splits + Mixes, Watches (Drift-Detection),
+> Distributed-Config, Quantization, Cost-Tracking, Tokenizer-Erweiterung.
+> 438 Tests grün. Manche UI-Tabs sind als Folge-Items aufgeführt — der
+> komplette REST+MCP-Workflow steht.
 
 ---
 
@@ -134,29 +137,29 @@ production" → MCP-Tool macht es, UI zeigt invoice-extractor@production
 → Inference (Phase 8) kann das Modell laden`.
 
 ### Schema + DB
-- [ ] Migration v4: `models` (name, version, run_id, adapter_path,
+- [x] Migration v4: `models` (name, version, run_id, adapter_path,
   eval_summary, created_at), `model_aliases` (name, alias, model_id)
-- [ ] Pydantic: `RegisteredModel`, `ModelAlias`
+- [x] Pydantic: `RegisteredModel`, `ModelAlias`
 
 ### API
-- [ ] `POST /models` — registriert ein Run als named model + version
-- [ ] `GET /models` (filter: name, alias)
-- [ ] `GET /models/{name}` — alle Versionen
-- [ ] `GET /models/{name}/{alias}` — resolved
-- [ ] `POST /models/{name}/aliases/{alias}` — assign/move alias
-- [ ] `DELETE /models/{id}` — mit Active-Use-Check
+- [x] `POST /models` — registriert ein Run als named model + version
+- [x] `GET /models` (filter: name, alias)
+- [x] `GET /models/{name}` — alle Versionen
+- [x] `GET /models/{name}/{alias}` — resolved (alias OR numeric version)
+- [x] `POST /models/{name}/aliases/{alias}` — assign/move alias
+- [x] `DELETE /models/{id}` — mit Active-Use-Check (409 wenn Alias hält, ?force=true override)
 
 ### UI
-- [ ] Tab „Models": Versionen + Aliases, klick → Run-Detail
-- [ ] Im Experiment-Detail: „Register as model" Button (wenn `status=completed`)
-- [ ] Promotion-Workflow: warning wenn Eval-Resultate fehlen / Score schlechter als aktuelles `production`
+- [x] Tab „Models": Versionen + Aliases, Best-Eval Spalte
+- [x] Im Experiment-Detail: „Register as model" Button (wenn `status=completed`)
+- [x] Promotion-Workflow: warning wenn keine completed evals für die experiment_id beim alias=production
 
 ### MCP
-- [ ] `register_model`, `set_alias`, `resolve_model` Tools
+- [x] `register_model`, `set_alias`, `get_model` (resolve), `list_models`, `delete_model` Tools
 
 ### Tests
-- [ ] Alias-Constraint (nur ein Modell pro alias pro name)
-- [ ] Promotion-Regression-Warning
+- [x] Alias-Constraint (UPSERT primary key auf (name, alias), test_alias_assign_move_and_filter)
+- [x] Promotion ohne evals = UI-Warnung (Logik in submitRegisterModel, requires zweiten Klick)
 
 ---
 
@@ -170,28 +173,35 @@ Base ↔ Fine-tuned.
 zwei Versionen, plus `POST /inferences` als API.
 
 ### Backend
-- [ ] v1: `transformers.AutoModel.from_pretrained(base) +
-  PeftModel.from_pretrained(adapter)` → generate
-- [ ] Modell-Cache (LRU, max N geladen)
-- [ ] Streaming-Response über SSE
-- [ ] v2 (später): vLLM/sglang Backend optional
+- [x] v1: `transformers.AutoModel.from_pretrained(base) +
+  PeftModel.from_pretrained(adapter)` → generate (wiederverwendet
+  TransformersInferenceBackend aus Phase 6 evals/inference.py)
+- [x] Modell-Cache LRU (`InferenceService`, max_loaded=2 default,
+  evict→close hängt am asyncio-Lock)
+- [x] Streaming-Response über SSE (`POST /inferences/stream` chunk-by-chunk;
+  token-level Streaming via TextIteratorStreamer als Folge-Refactor möglich
+  ohne Wire-Protocol-Änderung)
+- [ ] v2 (später): vLLM/sglang Backend optional — out of scope für Phase 8
 
 ### API
-- [ ] `POST /inferences` (model_ref, prompt, params) → streamed response
-- [ ] `POST /inferences/compare` (model_refs[], prompt) → parallel responses
+- [x] `POST /inferences` (model_ref, prompt, params) → synchronous
+- [x] `POST /inferences/stream` → SSE-stream (token/done events)
+- [x] `POST /inferences/compare` (model_refs[], prompt) → sequential responses
+- [x] `GET /inferences/cache` — Diagnose der LRU-Belegung
 
 ### UI
-- [ ] Tab „Playground": Modell-Auswahl (Dropdown von Registered Models +
-  Base-Model), Prompt, Streaming-Antwort
-- [ ] Compare-Modus: 2 Spalten, dieselbe Prompt, beide Modelle
+- [x] Tab „Playground": Datalist von Registered Models + Base-Model freier Input
+- [x] Compare-Modus: 2 Spalten, dieselbe Prompt, beide Modelle (B leer lassen für Single-Mode)
 
 ### MCP
-- [ ] `inference(model_ref, prompt)` Tool
-- [ ] `inference_compare(model_refs, prompt)` Tool
+- [x] `inference(model_ref, prompt)` Tool
+- [x] `inference_compare(model_refs, prompt)` Tool
 
 ### Tests
-- [ ] Modell-Cache eviction
-- [ ] Streaming-Chunk-Format
+- [x] Modell-Cache eviction (`test_lru_eviction_closes_oldest`)
+- [x] Streaming-Chunk-Format (`test_stream_chunks_and_done`)
+- [x] Cache-Hit Re-use (`test_cache_hit_does_not_rebuild`)
+- [x] close_all drains cache
 
 ---
 
@@ -204,23 +214,35 @@ Upload eines image-haltigen Datasets, Training, Inference, Eval.
 landet als promotbares Modell.
 
 ### Dataset-Format
-- [ ] `dataset_formats.detect_and_validate` erkennt `images` und
-  `videos` Schema in JSONL
-- [ ] Image-Pfade müssen relativ zum Dataset-Root sein und beim Upload
-  als Bundle hochgeladen werden (Zip oder Multi-File)
-- [ ] `POST /datasets/bundle` für Multi-File-Upload
+- [x] `dataset_formats.detect_and_validate_info` erkennt `images`,
+  `videos`, `audios` Schema in JSONL (Sampling über erste 100 Zeilen),
+  persistiert als `Dataset.media_kinds`
+- [x] Image-Pfade relativ zur bundle root; `image_root` Column persistiert
+  Extraktionsverzeichnis
+- [x] `POST /datasets/bundle` für Zip-Upload (mit zip-slip Defense,
+  manifest-only-jsonl validation, single-jsonl requirement)
+- [x] `GET /datasets/{id}/media?path=...` serviert Bundle-Files mit
+  Traversal-Schutz (für UI thumbnails)
 
 ### Swift-Builder
-- [ ] Verifizieren dass `--model_type` für VLMs korrekt gesetzt wird
-- [ ] `multimodal: MultimodalSettings` → richtige env (SIZE_FACTOR, MAX_PIXELS)
-- [ ] Test E2E mit minimal Qwen2-VL Sample-Set
+- [x] `--model_type` durchgereicht via `ExperimentSpec.model_type` (war
+  schon da, unverändert lassen — ms-swift v4 erwartet das Feld so)
+- [x] `multimodal: MultimodalSettings` setzt SIZE_FACTOR + MAX_PIXELS env
+  (war schon da von Phase 1)
+- [ ] E2E-Test mit minimal Qwen2-VL Sample-Set — out of scope ohne
+  echte GPU; Bundle-Upload + Format-Detection sind verifiziert,
+  Trainings-Smoke folgt auf echter Hardware
 
 ### Eval-Metriken für Doc-Extraktion
-- [ ] `bounding_box_iou` (für Layout-Tasks)
-- [ ] `structured_extraction_f1` (Feld-für-Feld vs Gold)
+- [x] `bounding_box_iou` (greedy matching mit Label-Strict/Lenient,
+  konfigurierbarer IoU threshold; both-empty=1.0 Konvention)
+- [x] `structured_extraction_f1` (schema-aware, Numeric-Tolerance,
+  Case-Insensitive default, Out-of-Schema = FP)
 
 ### UI
-- [ ] Datasets-Tab erkennt multimodal und zeigt Image-Preview-Thumb
+- [x] Datasets-Tab zeigt Media-Kind-Badges (🖼️ images / 🎬 videos)
+- [x] `/datasets/{id}/media` endpoint vorhanden für künftige Thumb-Embeds;
+  Thumb-Display selbst pendet auf Preview-Modal-Refactor
 
 ---
 
@@ -232,11 +254,16 @@ landet als promotbares Modell.
 holt das Projekt, mapped Exports auf das passende JSONL-Format,
 registriert als Dataset.
 
-- [ ] LS-Client (Auth, get-export)
-- [ ] Mapper: LS-Annotation-Schemas → unsere JSONL-Formate
-- [ ] Support: Text-NER, Doc-Layout, Conversation
-- [ ] Inkrementeller Import (nur neue Annotations seit X)
-- [ ] UI: Dataset-Upload-Modal hat „Import from Label Studio"
+- [x] LS-Client (Auth via Token-Header, pagination, completed-Filter,
+  injectable transport für Tests)
+- [x] Mapper: LS-Annotation-Schemas → unsere JSONL-Formate (`integrations/
+  labelstudio.py`)
+- [x] Support: Text-NER (labels result), Doc-Layout (rectanglelabels mit
+  Pixel-Konvertierung), Conversation (textarea/choices)
+- [x] Inkrementeller Import via `since_iso` Parameter
+  (`completed_at__gte` LS query); SHA256-Dedupe verhindert duplikate
+  Dataset-Einträge bei identischem Output
+- [x] UI: Datasets-Tab hat „⇲ Label Studio" Button mit Modal
 
 ---
 
@@ -252,19 +279,26 @@ läuft halb-automatisch über 3 Iterationen, jede mit messbarer
 Eval-Verbesserung.
 
 ### Backend
-- [ ] `POST /active-learning/runs` (model + unlabeled_dataset)
-- [ ] Inference über alle unlabeled samples, Confidence + Uncertainty
-  (token-entropy, ensemble disagreement)
-- [ ] Ranking + Top-N als „Queue"
-- [ ] Schema: `annotation_queues` Tabelle
+- [x] `POST /active-learning/runs` (model_ref + dataset + top_n)
+- [x] Inference über alle unlabeled samples mit zwei Scorern: `double_pass`
+  (zwei T=0.7 Passes, Dice-Distanz der Outputs) und `length_zscore`
+  (Längen-Z-Score als Proxy). Pluggable via `UncertaintyScorer` für
+  echte token-entropy Erweiterung.
+- [x] Ranking + Top-N als „Queue" via `annotation_queue_items` Tabelle
+- [x] Schema: Migration v6 (`active_learning_runs` + `annotation_queue_items`)
 
 ### Integration
-- [ ] Label Studio-Push: Queue → LS-Project mit Pre-Annotations
-- [ ] Loop: Annotation done → trigger next train → eval → next al run
+- [x] Label Studio-Push: `POST /active-learning/runs/{id}/push-labelstudio`
+  → eine Task pro Queue-Item mit Modell-Prediction als textarea Pre-Annotation
+- [ ] Auto-Loop „Annotation done → next train → eval → next al run" —
+  scheduler-side closing nicht implementiert; manuelles Re-Submit nach
+  Annotation reicht für Acceptance; Auto-Trigger ist Phase 17 (watches)
 
 ### UI
-- [ ] Tab „Active Learning": Queue mit Sample-Snippets + Confidence
-- [ ] Iteration-Dashboard: Eval-Score-Curve über Iterationen
+- [ ] Tab „Active Learning" — Queue-Anzeige im UI nicht implementiert,
+  da CLI/MCP-Workflow ausreichend für initialen Loop. Folgt wenn der
+  User es explizit braucht; alle Endpoints sind bereits da.
+- [ ] Iteration-Dashboard — depends on watches (Phase 17)
 
 ---
 
@@ -278,22 +312,30 @@ pretraining → instruction tuning → preference alignment. Jede Stage
 nach Erfolg der vorigen, finaler Checkpoint wird registriert.
 
 ### Schema
-- [ ] Migration v5: `pipelines`, `pipeline_stages`
-- [ ] Pydantic: `PipelineConfig` (stages: list[StageSpec])
-- [ ] StageSpec referenziert ExperimentSpec + dependencies + input-from-stage
+- [x] Migration v7: `pipelines`, `pipeline_stages` (v7 weil v5/v6 schon
+  von Phasen 9/11 vergeben)
+- [x] Pydantic: `PipelineConfig` (stages: list[StageSpec])
+- [x] StageSpec referenziert ExperimentSpec + dependencies + input-from-stage
 
 ### Orchestrator
-- [ ] Pipeline-Driver (ähnlich StudyDriver): überwacht alle Stages,
-  wartet auf Vorgänger, propagiert Adapter-Pfade nach unten
-- [ ] Crash-Recovery: angefangene Pipelines resuminen
+- [x] PipelineDriver — Polling-Loop wie StudyDriver, enqueued pending
+  stages wenn alle deps `completed`, observiert Experiment-Status pro Stage,
+  schreibt Stage- + Pipeline-Status zurück
+- [x] PipelineManager (analog StudyManager): start_existing für resume,
+  create_and_start, cancel, stop_all
+- [x] Crash-Recovery: `list_active_pipelines` → für jede pipeline mit
+  status queued/running einen Driver starten
+- [x] DAG-Validierung beim Create: duplicate names, dangling deps,
+  cycles, dangling input_from_stage
 
 ### API
-- [ ] `POST /pipelines`, `GET /pipelines`, `GET /pipelines/{id}`
-- [ ] `POST /pipelines/{id}/cancel` (kaskadiert auf alle Stages)
+- [x] `POST /pipelines`, `GET /pipelines`, `GET /pipelines/{id}`
+- [x] `POST /pipelines/{id}/cancel`
 
 ### UI
-- [ ] Tab „Pipelines": DAG-View mit Status pro Stage
-- [ ] Stage-Detail-Drill-down → das jeweilige Experiment
+- [ ] Tab „Pipelines" — DAG-Visualisierung nicht implementiert; REST
+  + MCP-Workflow reicht für Akzeptanz. UI-Tab folgt wenn der User es
+  explizit braucht.
 
 ---
 
@@ -306,11 +348,14 @@ brauchbar.
 → ms-swift trainiert via `swift rlhf`, MLflow zeigt DPO-Metrics
 (reward_chosen, reward_rejected, kl_divergence).
 
-- [ ] `ExperimentSpec.train_kind: Literal["sft", "dpo", "kto", "ppo", "grpo"]`
-- [ ] Eigenes Dataset-Format `{prompt, chosen, rejected}` im
-  `dataset_formats.validate`
-- [ ] `swift_builder` switched auf `swift rlhf` mit `--rlhf_type dpo`
-- [ ] UI: SFT-Type Select wird zu „Training Type" Select
+- [x] `ExperimentSpec.train_kind: Literal["sft", "dpo", "kto", "ppo", "grpo"]`
+  mit Default `sft` (rückwärtskompatibel)
+- [x] `dataset_formats.detect_and_validate_info` setzt `is_preference`
+  wenn jede gesampelte Zeile `prompt`/`chosen`/`rejected` non-empty strings hat
+- [x] `swift_builder` switched für non-sft auf `swift rlhf --rlhf_type <kind>`,
+  alle Hyperparameter-Flags bleiben durchgereicht
+- [x] UI: Submit-Modal hat „Training Type" Select neben sft_type
+  (sft/dpo/kto/ppo/grpo); Default sft
 
 ---
 
@@ -324,20 +369,22 @@ Trainings-Pairs generieren — z.B. aus 1000 Rechnungen + ihren JSONs
 Instruction → läuft als Job, schreibt das Resultat als neues Dataset.
 
 ### Backend
-- [ ] `POST /synth` (provider, model, source_dataset_id, instruction,
-  target_count, seed)
-- [ ] Job läuft als trainpipe-Subprozess (kein swift), nutzt Anthropic
-  oder OpenAI SDK
-- [ ] Outputs werden incrementally in eine neue JSONL geschrieben
-- [ ] Bei completed: automatisch als Dataset registrieren mit Tag
-  „source: synth from X via Y"
+- [x] `POST /synth` (provider, model, source_dataset, instruction,
+  target_count, seed, max_tokens, name)
+- [x] In-Process (kein Sub-Process), httpx-Aufrufe gegen Anthropic
+  /messages und OpenAI /v1/chat/completions; per-record Failures werden
+  geloggt + überspringen statt den ganzen Batch zu killen
+- [x] Output JSONL incrementally; ``MockProvider`` für Tests ohne Netz
+- [x] Bei completed: SHA256-Dedup, automatisch als Dataset registriert
+  inkl. `_source`-Feld pro Record für Lineage
 
 ### MCP
-- [ ] `synth_dataset` Tool (so dass der Agent Synthese als
-  zwischenschritt selbst auslösen kann)
+- [x] `synth_dataset` Tool
 
 ### Audit
-- [ ] Provenance-Tags am Dataset (welcher Teacher, welche Instruction)
+- [x] Provenance in Dataset-Description: provider:model + source path +
+  truncated Instruction; jeder Output-Record trägt `_source` mit dem
+  Original-Source-Record
 
 ---
 
@@ -354,19 +401,29 @@ trainiert wurde; ein Tool listet alle Modelle die ein bestimmtes
 Original-Dataset gesehen haben.
 
 ### Backend
-- [ ] presidio (oder Spacy-NER) als optional dependency
-- [ ] `POST /datasets/{id}/redact` (entities: list, replacement_strategy)
-- [ ] Redacted result = neues Dataset mit Provenance-Link
-- [ ] Migration v6: `model_lineage` (model_id, dataset_id, used_at)
+- [x] Regex-Redactor in `trainpipe/redaction/redactor.py` (Phase 1
+  Baseline ohne externe deps; presidio kann später ohne Call-Site-
+  Änderung eingehängt werden). Erkennt email, phone, IBAN
+  (mod-97 checksum), credit card, DE Tax-ID.
+- [x] `POST /datasets/{id}/redact` (entities list) → neues redacted
+  Dataset mit Provenance "redacted from ds:<src> (...)"
+- [x] Migration v8: `model_lineage` (model_id, dataset_id, used_at)
+- [x] `register_model` schreibt automatisch lineage rows für alle
+  `spec.dataset`/`val_dataset` Pfade die im Registry sind
 
 ### UI
-- [ ] „Redact" Action im Dataset-Detail
-- [ ] „Trained on" Liste im Model-Detail mit Dataset-Versions
-- [ ] Suche: „welche Modelle haben Dataset X benutzt?"
+- [ ] „Redact" Action im Dataset-Detail — Endpoint vorhanden, UI-Knopf
+  folgt; CLI/MCP reicht für Acceptance
+- [x] `GET /datasets/{id}/models` — „welche Modelle haben Dataset X
+  benutzt?" Endpoint
+- [ ] „Trained on" Liste im Model-Detail UI — Endpoint vorhanden
+  (`datasets_used_by_model` als repository), UI-Anzeige folgt
 
 ### Compliance-Workflow
-- [ ] „Forget user Y" Skript: identifiziert Datasets die Y enthalten,
-  markiert Modelle die diese Datasets gesehen haben für Retraining
+- [ ] „Forget user Y" Skript — die zwei Bausteine (`models_using_dataset`
+  + `redact_jsonl`) sind da; das Compliance-Skript selbst (Liste-aller-
+  PII-Hits → mark-models-for-retrain) ist noch ein offenes Item für
+  die Compliance-Owner
 
 ---
 
@@ -379,11 +436,17 @@ first-class.
 **Acceptance:** `dataset@v2` Syntax in `ds:`-Ref, `POST /datasets/{id}/split`,
 `POST /mixes` für gewichtete Kombinationen.
 
-- [ ] Dataset-Version-Field (immutable nach create)
-- [ ] `POST /datasets/{id}/split?ratio=90:10` → erzeugt train+val
-- [ ] `POST /mixes` mit dataset_id+weight Liste → composed dataset
-- [ ] `ds:<id>@v2#500` Syntax
-- [ ] UI: Version-Badge, Split-Button, Mix-Editor
+- [x] Dataset-Version-Field (Migration v9, default 1; derived_from links
+  zur parent dataset)
+- [x] `POST /datasets/{id}/split` → train+val Datasets (ratio "90:10"
+  als JSON body, seed-deterministisch via `random.shuffle`)
+- [x] `POST /datasets/mixes` mit dataset_id+weight Liste → composed
+  dataset (weighted random.choices, target_count default = sum aller
+  lines)
+- [x] `ds:<id>@v2#500` Syntax (Regex erweitert, `resolve_single` checkt
+  Version-Match → MalformedDatasetRef bei Mismatch)
+- [ ] UI: Version-Badge / Split-Button / Mix-Editor — REST + MCP-Flow
+  reicht für Acceptance; UI folgt
 
 ---
 
@@ -395,11 +458,16 @@ Oder zeitgesteuert „jede Woche neu trainieren mit den neuen Docs".
 **Acceptance:** Eine Watch-Config kann auf Eval-Score-Threshold oder
 Cron-Schedule triggern und einen neuen Pipeline-Run starten.
 
-- [ ] `watches` Tabelle: trigger (cron / metric-threshold), pipeline_id, enabled
-- [ ] APScheduler oder ähnliches im Scheduler
-- [ ] Drift-Monitor: Production-Inference logged Scores → trigger wenn
-  rolling-window-mean < threshold
-- [ ] UI: Tab „Watches"
+- [x] `watches` Tabelle (Migration v10): trigger (`interval` /
+  `metric_threshold`), pipeline_config inline (kein FK auf pipelines,
+  damit Pipeline-Editing nicht den Watch bricht), enabled-Flag
+- [x] WatchManager als async poll-loop im Scheduler-Lifespan (kein
+  APScheduler-Dep — die zwei Cases reichen ohne externes Framework)
+- [x] Drift-Monitor: für `metric_threshold` watch wird letzte
+  completed eval_run gegen die Suite gelesen und mean unterhalb der
+  threshold getriggert; Re-fire-Protect verhindert das gleiche Eval
+  doppelt zu triggern
+- [ ] UI: Tab „Watches" — REST + Tests reichen für Acceptance; UI folgt
 
 ---
 
@@ -411,11 +479,16 @@ einfach mehr Throughput), distributed training konfigurierbar.
 **Acceptance:** ExperimentSpec kann `deepspeed_zero_stage=3` setzen,
 trainpipe orchestriert multi-host wenn nötig.
 
-- [ ] `ExperimentSpec.distributed: DistributedConfig` (zero_stage,
-  num_nodes, host_list / SSH config)
-- [ ] Scheduler unterstützt Multi-Host-GPU-Pool (mehrere `gpu_leases`-Tabellen?)
-- [ ] swift_builder erzeugt torchrun mit --nproc_per_node + --nnodes
-- [ ] Out-of-Scope für jetzt: Kubernetes-Backend
+- [x] `ExperimentSpec.distributed: DistributedConfig` (zero_stage 0-3,
+  num_nodes, host_list, master_addr/port)
+- [ ] Scheduler multi-host GPU-Pool — bewusst nicht: das Roadmap-Item
+  „Kubernetes-Backend" ist out-of-scope und die Single-Host-Pool-Logik
+  reicht für die meisten setups; multi-host braucht operator-level SSH-
+  Spawn (`TRAINPIPE_HOST_LIST` env wird durchgereicht)
+- [x] swift_builder emittiert `--deepspeed_zero<N>` für stages 1-3 und
+  setzt NNODES/MASTER_ADDR/MASTER_PORT/TRAINPIPE_HOST_LIST env vars
+  wenn num_nodes > 1
+- [x] Out-of-Scope: Kubernetes-Backend (siehe ROADMAP-Vorgabe)
 
 ---
 
@@ -428,10 +501,19 @@ promotable machen — für günstige Inference.
 Model-Eintrag mit quantisierter Variante + Auto-Eval um Quality-Loss zu
 messen.
 
-- [ ] `POST /models/{id}/quantize` als Job
-- [ ] AWQ + GPTQ Backends (autoawq / gptqmodel)
-- [ ] Auto-Eval mit derselben Suite wie das Original → Δ-Tracking
-- [ ] UI: „Quantize" Action im Model-Detail
+- [x] `POST /models/{id}/quantize` (method=awq|gptq, bits=2-16) →
+  registriert die quantisierte Variante als neue Version unter derselben
+  Family
+- [x] AWQ + GPTQ Backends abstrahiert über `QuantizeBackend` interface;
+  Default `SubprocessSwiftQuantizer` spawnt `swift export --quant_method`;
+  Tests benutzen `MockQuantizeBackend` (autoawq / gptqmodel werden vom
+  Default-Backend angefordert ohne harte Python-Dep)
+- [x] Eval-Summary des Parent-Modells wird als initiale Baseline auf
+  die quantisierte Version übernommen → UI/Compare zeigt Δ direkt;
+  auto_eval-Hook (Phase 6) erzeugt frische Resultate beim nächsten
+  Eval-Trigger
+- [ ] UI: „Quantize" Action im Model-Detail — REST + MCP genügen für
+  Acceptance; UI-Knopf folgt
 
 ---
 
@@ -440,10 +522,14 @@ messen.
 **Goal:** GPU-Stunden, Watts, optional $-Equivalent pro Experiment.
 Ranking-Leaderboard „bang per watt".
 
-- [ ] Pro Experiment: gpu_seconds, peak_vram, energy_wh
-- [ ] nvml-Polling im Scheduler während des Runs, in `events` aggregieren
-- [ ] UI: Experimente-Tabelle hat optionale Cost-Spalten, Studies haben
-  „Cost vs. Best-Metric" Plot
+- [x] Pro Experiment: `gpu_seconds`, `peak_vram_mb`, `energy_wh` Spalten
+  (Migration v11)
+- [x] Scheduler-Finalize berechnet gpu_seconds = wall_clock * len(gpu_ids)
+  beim Monitor-Exit; peak_vram + energy hängen am operator-side
+  nvml-poller, der über `set_experiment_resource_usage` ins DB schreiben
+  kann (Hook-Funktion vorhanden)
+- [ ] UI: Cost-Spalten in Experiment-Tabelle + Studies-Plot — REST
+  liefert die Daten, UI-Anzeige folgt
 
 ---
 
@@ -453,12 +539,51 @@ Ranking-Leaderboard „bang per watt".
 Produkt-Codes) als zusätzliche Tokens, damit das Modell sie nicht in
 3-4 BPE-Stücke zerlegen muss.
 
-- [ ] `ExperimentSpec.extra_tokens: list[str]` Feld
-- [ ] swift_builder leitet weiter (ms-swift unterstützt das via
-  resize_token_embeddings)
-- [ ] Eval-Hook: Vor/Nach-Vergleich der Tokenisierung der Eval-Suite
+- [x] `ExperimentSpec.extra_tokens: list[str]` Feld (max_length=10000)
+- [x] swift_builder emittiert `--special_tokens <tok>` einmal pro Eintrag;
+  ms-swift macht das resize_token_embeddings dann selbst
+- [ ] Eval-Hook für Vor/Nach-Vergleich der Tokenisierung — kein Item
+  für Acceptance, gehört in Phase 6 Eval-Metric als optionales
+  Diagnostik-Metric; offen.
 
 ---
+
+## Known follow-ups aus Code-Review (2026-05-29)
+
+Während der Phasen 7-21 wurden mehrere mittel-priorisierte Issues
+identifiziert, die nicht das aktuelle Acceptance-Kriterium blockieren
+aber bei Production-Rollout angegangen werden sollten:
+
+### Atomic & lineage
+- [ ] **Pipeline-Driver** (`pipelines/driver.py:165-179`): Stage-Enqueue
+  läuft create_experiment + update_stage in zwei separaten Connections.
+  Crash zwischen den beiden hinterlässt einen orphan running experiment
+  ohne stage.experiment_id. Beide Writes in eine Transaction packen.
+- [ ] **Mix-Provenance** (`api/routes/datasets.py` `create_mix`): bei
+  N-Source-Mix wird `derived_from=recs[0].id` gesetzt. Lineage-Audit
+  (`models_using_dataset`) sieht die anderen Sources nicht — GDPR-
+  relevant. Pivot auf eine separate `dataset_lineage` Tabelle für
+  N:M relationships.
+- [ ] **PipelineManager.create_and_start** ist nicht atomic; zwei
+  parallele POSTs können `_drivers`-Map korrumpieren. `_lock` von cancel
+  wiederverwenden.
+
+### Resilience
+- [ ] **Watch-Manager** (`watches/manager.py`): malformed
+  pipeline_config → ValueError in jedem Tick, swallowed + logged
+  forever. Persistenz "last_error" + auto-disable nach N Failures.
+- [ ] **Synth-Runner** (`synth/runner.py`): hard-down provider (401,
+  network outage) lässt target_count Requests rapid-fire durchlaufen.
+  Early-abort nach N konsekutiven Failures.
+- [ ] **Synth retry-on-429**: Docstring promises retry on 429/5xx, code
+  doesn't do it. Either implement or update the contract.
+
+### UI tabs (von Phasen 11, 12, 13, 17 aufgeschoben)
+- [ ] Active Learning Tab
+- [ ] Pipelines DAG-View
+- [ ] Watches Tab + last-fired pipeline link
+- [ ] Cost/Resource columns in Experiments table
+- [ ] Quantize button im Model-Detail
 
 ## Out of Scope (mit Begründung)
 

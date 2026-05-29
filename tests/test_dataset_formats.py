@@ -1,4 +1,5 @@
 import json
+
 import pytest
 
 from trainpipe.training.dataset_formats import (

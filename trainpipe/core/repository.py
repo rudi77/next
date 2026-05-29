@@ -13,6 +13,9 @@ from typing import Any
 import aiosqlite
 
 from ..api.schemas import (
+    ActiveLearningRun,
+    ALRunStatus,
+    AnnotationQueueItem,
     Dataset,
     EvalResult,
     EvalRun,
@@ -24,9 +27,16 @@ from ..api.schemas import (
     InferenceParams,
     MetricAggregate,
     MetricConfig,
+    Pipeline,
+    PipelineConfig,
+    PipelineStage,
+    PipelineStatus,
+    RegisteredModel,
+    StageStatus,
     StudyConfig,
     StudyRecord,
     StudyStatus,
+    Watch,
 )
 
 
@@ -39,6 +49,14 @@ def utcnow_iso() -> str:
 
 
 def _row_to_experiment_record(row: aiosqlite.Row) -> ExperimentRecord:
+    def _maybe_get(name: str):
+        # Older schema versions don't have these columns; tolerate that
+        # in repository reads so test fixtures with pre-v11 DBs still work.
+        try:
+            return row[name]
+        except (KeyError, IndexError):
+            return None
+
     return ExperimentRecord(
         id=row["id"],
         spec=ExperimentSpec.model_validate_json(row["spec_json"]),
@@ -60,7 +78,40 @@ def _row_to_experiment_record(row: aiosqlite.Row) -> ExperimentRecord:
             if row["last_heartbeat_at"]
             else None
         ),
+        gpu_seconds=_maybe_get("gpu_seconds"),
+        peak_vram_mb=_maybe_get("peak_vram_mb"),
+        energy_wh=_maybe_get("energy_wh"),
     )
+
+
+async def set_experiment_resource_usage(
+    conn: aiosqlite.Connection,
+    experiment_id: str,
+    *,
+    gpu_seconds: float | None = None,
+    peak_vram_mb: float | None = None,
+    energy_wh: float | None = None,
+) -> None:
+    """Write Phase 20 cost columns. NULL inputs leave the column alone."""
+    fields: list[str] = []
+    args: list[Any] = []
+    if gpu_seconds is not None:
+        fields.append("gpu_seconds = ?")
+        args.append(gpu_seconds)
+    if peak_vram_mb is not None:
+        fields.append("peak_vram_mb = ?")
+        args.append(peak_vram_mb)
+    if energy_wh is not None:
+        fields.append("energy_wh = ?")
+        args.append(energy_wh)
+    if not fields:
+        return
+    args.append(experiment_id)
+    await conn.execute(
+        f"UPDATE experiments SET {', '.join(fields)} WHERE id = ?",
+        args,
+    )
+    await conn.commit()
 
 
 async def create_experiment(
@@ -267,6 +318,30 @@ async def set_study_status(
 
 
 def _row_to_dataset(row: aiosqlite.Row) -> Dataset:
+    media_kinds: list[str] = []
+    # Migration v5 columns may not be loaded by row_to_dict on older rows;
+    # access with try/except KeyError so the function tolerates pre-v5
+    # snapshots in test fixtures.
+    try:
+        raw = row["media_kinds_json"]
+        if raw:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                media_kinds = [str(k) for k in parsed]
+    except (KeyError, IndexError):
+        pass
+    try:
+        image_root = row["image_root"]
+    except (KeyError, IndexError):
+        image_root = None
+    try:
+        version = row["version"] or 1
+    except (KeyError, IndexError):
+        version = 1
+    try:
+        derived_from = row["derived_from"]
+    except (KeyError, IndexError):
+        derived_from = None
     return Dataset(
         id=row["id"],
         name=row["name"],
@@ -277,6 +352,10 @@ def _row_to_dataset(row: aiosqlite.Row) -> Dataset:
         sha256=row["sha256"],
         description=row["description"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        media_kinds=media_kinds,
+        image_root=image_root,
+        version=version,
+        derived_from=derived_from,
     )
 
 
@@ -291,12 +370,18 @@ async def create_dataset(
     line_count: int | None = None,
     description: str | None = None,
     dataset_id: str | None = None,
+    media_kinds: list[str] | None = None,
+    image_root: str | None = None,
+    version: int = 1,
+    derived_from: str | None = None,
 ) -> str:
     if dataset_id is None:
         dataset_id = uuid.uuid4().hex
     await conn.execute(
         "INSERT INTO datasets (id, name, path, format, line_count, size_bytes, "
-        "sha256, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "sha256, description, media_kinds_json, image_root, version, "
+        "derived_from, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             dataset_id,
             name,
@@ -306,6 +391,10 @@ async def create_dataset(
             size_bytes,
             sha256,
             description,
+            json.dumps(media_kinds) if media_kinds else None,
+            image_root,
+            version,
+            derived_from,
             utcnow_iso(),
         ),
     )
@@ -710,6 +799,820 @@ async def count_eval_results(conn: aiosqlite.Connection, run_id: str) -> int:
     )
     row = await cur.fetchone()
     return int(row[0]) if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Model registry (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+async def _aliases_for_model(
+    conn: aiosqlite.Connection, model_id: str
+) -> list[str]:
+    cur = await conn.execute(
+        "SELECT alias FROM model_aliases WHERE model_id = ? ORDER BY alias",
+        (model_id,),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+async def _row_to_registered_model(
+    conn: aiosqlite.Connection, row: aiosqlite.Row
+) -> RegisteredModel:
+    aliases = await _aliases_for_model(conn, row["id"])
+    return RegisteredModel(
+        id=row["id"],
+        name=row["name"],
+        version=row["version"],
+        run_id=row["run_id"],
+        experiment_id=row["experiment_id"],
+        base_model=row["base_model"],
+        adapter_path=row["adapter_path"],
+        eval_summary=(
+            json.loads(row["eval_summary_json"])
+            if row["eval_summary_json"]
+            else None
+        ),
+        description=row["description"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        aliases=aliases,
+    )
+
+
+async def next_model_version(conn: aiosqlite.Connection, name: str) -> int:
+    cur = await conn.execute(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM models WHERE name = ?",
+        (name,),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 1
+
+
+async def create_model(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    version: int,
+    base_model: str,
+    adapter_path: str | None,
+    experiment_id: str | None,
+    run_id: str | None,
+    eval_summary: dict[str, Any] | None,
+    description: str | None,
+    model_id: str | None = None,
+) -> str:
+    if model_id is None:
+        model_id = uuid.uuid4().hex
+    await conn.execute(
+        "INSERT INTO models (id, name, version, run_id, experiment_id, "
+        "base_model, adapter_path, eval_summary_json, description, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            model_id,
+            name,
+            version,
+            run_id,
+            experiment_id,
+            base_model,
+            adapter_path,
+            json.dumps(eval_summary) if eval_summary is not None else None,
+            description,
+            utcnow_iso(),
+        ),
+    )
+    await conn.commit()
+    return model_id
+
+
+async def register_model_atomic(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    explicit_version: int | None,
+    base_model: str,
+    adapter_path: str | None,
+    experiment_id: str | None,
+    run_id: str | None,
+    eval_summary: dict[str, Any] | None,
+    description: str | None,
+    alias: str | None,
+) -> tuple[str, int]:
+    """Register a model with auto-version + optional alias, atomically.
+
+    All writes happen in a single transaction so:
+      (a) two concurrent registrations of the same ``name`` cannot both
+          land on the same auto-incremented version (the loser sees the
+          UNIQUE(name, version) constraint and retries),
+      (b) a failure during alias assignment cannot leave a model row
+          behind with no alias.
+
+    On explicit-version conflict, raises ``ValueError("version_exists")``
+    so the route can translate to a 409.
+    """
+    # SQLite + aiosqlite: connections default to autocommit-on-write via
+    # BEGIN ... COMMIT inside .execute(). For a multi-statement atomic
+    # block we open an explicit transaction.
+    max_attempts = 5
+    last_exc: Exception | None = None
+    for _attempt in range(max_attempts):
+        try:
+            await conn.execute("BEGIN IMMEDIATE")
+            if explicit_version is None:
+                cur = await conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) + 1 FROM models WHERE name = ?",
+                    (name,),
+                )
+                row = await cur.fetchone()
+                version = int(row[0]) if row else 1
+            else:
+                version = explicit_version
+                cur = await conn.execute(
+                    "SELECT 1 FROM models WHERE name = ? AND version = ?",
+                    (name, version),
+                )
+                if await cur.fetchone() is not None:
+                    await conn.execute("ROLLBACK")
+                    raise ValueError("version_exists")
+
+            model_id = uuid.uuid4().hex
+            await conn.execute(
+                "INSERT INTO models (id, name, version, run_id, experiment_id, "
+                "base_model, adapter_path, eval_summary_json, description, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    model_id,
+                    name,
+                    version,
+                    run_id,
+                    experiment_id,
+                    base_model,
+                    adapter_path,
+                    json.dumps(eval_summary) if eval_summary is not None else None,
+                    description,
+                    utcnow_iso(),
+                ),
+            )
+            if alias:
+                await conn.execute(
+                    "INSERT INTO model_aliases (name, alias, model_id, "
+                    "updated_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(name, alias) DO UPDATE SET "
+                    "model_id = excluded.model_id, "
+                    "updated_at = excluded.updated_at",
+                    (name, alias, model_id, utcnow_iso()),
+                )
+            await conn.commit()
+            return model_id, version
+        except aiosqlite.IntegrityError as e:
+            # Auto-version path: another transaction grabbed our version.
+            # Roll back and retry with a fresh MAX(version).
+            try:
+                await conn.execute("ROLLBACK")
+            except aiosqlite.Error:
+                pass
+            if explicit_version is not None:
+                # Explicit version race — still surfaces as version_exists.
+                raise ValueError("version_exists") from None
+            last_exc = e
+            continue
+    assert last_exc is not None
+    raise last_exc
+
+
+# ---------------------------------------------------------------------------
+# Active learning (Phase 11)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_al_run(row: aiosqlite.Row) -> ActiveLearningRun:
+    return ActiveLearningRun(
+        id=row["id"],
+        model_ref=row["model_ref"],
+        dataset_path=row["dataset_path"],
+        top_n=row["top_n"],
+        sample_limit=row["sample_limit"],
+        status=ALRunStatus(row["status"]),
+        error=row["error"],
+        scored_count=row["scored_count"],
+        queued_count=row["queued_count"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+        finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+    )
+
+
+async def create_al_run(
+    conn: aiosqlite.Connection,
+    *,
+    model_ref: str,
+    dataset_path: str,
+    top_n: int,
+    sample_limit: int | None,
+    run_id: str | None = None,
+) -> str:
+    if run_id is None:
+        run_id = uuid.uuid4().hex
+    now = utcnow_iso()
+    await conn.execute(
+        "INSERT INTO active_learning_runs (id, model_ref, dataset_path, "
+        "top_n, sample_limit, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, 'queued', ?)",
+        (run_id, model_ref, dataset_path, top_n, sample_limit, now),
+    )
+    await conn.commit()
+    return run_id
+
+
+async def get_al_run(
+    conn: aiosqlite.Connection, run_id: str
+) -> ActiveLearningRun | None:
+    cur = await conn.execute(
+        "SELECT * FROM active_learning_runs WHERE id = ?", (run_id,)
+    )
+    row = await cur.fetchone()
+    return _row_to_al_run(row) if row else None
+
+
+async def list_al_runs(
+    conn: aiosqlite.Connection,
+    *,
+    status: ALRunStatus | None = None,
+    limit: int = 100,
+) -> list[ActiveLearningRun]:
+    sql = "SELECT * FROM active_learning_runs"
+    args: list[Any] = []
+    if status:
+        sql += " WHERE status = ?"
+        args.append(status.value)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
+    cur = await conn.execute(sql, args)
+    rows = await cur.fetchall()
+    return [_row_to_al_run(r) for r in rows]
+
+
+async def update_al_run_status(
+    conn: aiosqlite.Connection,
+    run_id: str,
+    *,
+    status: ALRunStatus,
+    error: str | None = None,
+    scored_count: int | None = None,
+    queued_count: int | None = None,
+) -> None:
+    fields = ["status = ?"]
+    args: list[Any] = [status.value]
+    if status == ALRunStatus.RUNNING:
+        fields.append("started_at = ?")
+        args.append(utcnow_iso())
+    if status in (
+        ALRunStatus.COMPLETED,
+        ALRunStatus.FAILED,
+        ALRunStatus.CANCELLED,
+    ):
+        fields.append("finished_at = ?")
+        args.append(utcnow_iso())
+    if error is not None:
+        fields.append("error = ?")
+        args.append(error)
+    if scored_count is not None:
+        fields.append("scored_count = ?")
+        args.append(scored_count)
+    if queued_count is not None:
+        fields.append("queued_count = ?")
+        args.append(queued_count)
+    args.append(run_id)
+    await conn.execute(
+        f"UPDATE active_learning_runs SET {', '.join(fields)} WHERE id = ?",
+        args,
+    )
+    await conn.commit()
+
+
+async def add_queue_item(
+    conn: aiosqlite.Connection,
+    *,
+    run_id: str,
+    sample_index: int,
+    input: dict[str, Any],
+    prediction: str,
+    uncertainty: float,
+) -> int:
+    cur = await conn.execute(
+        "INSERT INTO annotation_queue_items (run_id, sample_index, "
+        "input_json, prediction, uncertainty, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            sample_index,
+            json.dumps(input),
+            prediction,
+            float(uncertainty),
+            utcnow_iso(),
+        ),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+def _row_to_queue_item(row: aiosqlite.Row) -> AnnotationQueueItem:
+    return AnnotationQueueItem(
+        id=row["id"],
+        run_id=row["run_id"],
+        sample_index=row["sample_index"],
+        input=json.loads(row["input_json"]),
+        prediction=row["prediction"],
+        uncertainty=row["uncertainty"],
+        annotated=bool(row["annotated"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+async def list_queue_items(
+    conn: aiosqlite.Connection,
+    run_id: str,
+    *,
+    only_unannotated: bool = False,
+    limit: int = 500,
+) -> list[AnnotationQueueItem]:
+    sql = "SELECT * FROM annotation_queue_items WHERE run_id = ?"
+    args: list[Any] = [run_id]
+    if only_unannotated:
+        sql += " AND annotated = 0"
+    sql += " ORDER BY uncertainty DESC, sample_index ASC LIMIT ?"
+    args.append(limit)
+    cur = await conn.execute(sql, args)
+    rows = await cur.fetchall()
+    return [_row_to_queue_item(r) for r in rows]
+
+
+async def mark_queue_annotated(
+    conn: aiosqlite.Connection, item_id: int
+) -> bool:
+    cur = await conn.execute(
+        "UPDATE annotation_queue_items SET annotated = 1 WHERE id = ?",
+        (item_id,),
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Pipelines (Phase 12)
+# ---------------------------------------------------------------------------
+
+
+async def create_pipeline(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    config: PipelineConfig,
+    pipeline_id: str | None = None,
+) -> str:
+    if pipeline_id is None:
+        pipeline_id = uuid.uuid4().hex
+    now = utcnow_iso()
+    await conn.execute(
+        "INSERT INTO pipelines (id, name, config_json, status, created_at, "
+        "updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+        (pipeline_id, name, config.model_dump_json(), now, now),
+    )
+    for idx, stage in enumerate(config.stages):
+        await conn.execute(
+            "INSERT INTO pipeline_stages (pipeline_id, stage_name, stage_index, "
+            "depends_on_json, status) VALUES (?, ?, ?, ?, 'pending')",
+            (
+                pipeline_id,
+                stage.name,
+                idx,
+                json.dumps(stage.depends_on),
+            ),
+        )
+    await conn.commit()
+    return pipeline_id
+
+
+def _row_to_stage(row: aiosqlite.Row) -> PipelineStage:
+    return PipelineStage(
+        stage_name=row["stage_name"],
+        stage_index=row["stage_index"],
+        depends_on=json.loads(row["depends_on_json"]) if row["depends_on_json"] else [],
+        experiment_id=row["experiment_id"],
+        status=StageStatus(row["status"]),
+        output_dir=row["output_dir"],
+        error=row["error"],
+        started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+        finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+    )
+
+
+async def get_pipeline(
+    conn: aiosqlite.Connection, pipeline_id: str
+) -> Pipeline | None:
+    cur = await conn.execute(
+        "SELECT * FROM pipelines WHERE id = ?", (pipeline_id,)
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    stage_cur = await conn.execute(
+        "SELECT * FROM pipeline_stages WHERE pipeline_id = ? "
+        "ORDER BY stage_index",
+        (pipeline_id,),
+    )
+    stage_rows = await stage_cur.fetchall()
+    return Pipeline(
+        id=row["id"],
+        name=row["name"],
+        status=PipelineStatus(row["status"]),
+        config=PipelineConfig.model_validate_json(row["config_json"]),
+        stages=[_row_to_stage(r) for r in stage_rows],
+        error=row["error"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+async def list_pipelines(conn: aiosqlite.Connection) -> list[Pipeline]:
+    cur = await conn.execute(
+        "SELECT id FROM pipelines ORDER BY created_at DESC"
+    )
+    rows = await cur.fetchall()
+    out: list[Pipeline] = []
+    for row in rows:
+        p = await get_pipeline(conn, row["id"])
+        if p:
+            out.append(p)
+    return out
+
+
+async def list_active_pipelines(
+    conn: aiosqlite.Connection,
+) -> list[Pipeline]:
+    cur = await conn.execute(
+        "SELECT id FROM pipelines WHERE status IN ('queued', 'running')"
+    )
+    rows = await cur.fetchall()
+    out: list[Pipeline] = []
+    for row in rows:
+        p = await get_pipeline(conn, row["id"])
+        if p:
+            out.append(p)
+    return out
+
+
+async def set_pipeline_status(
+    conn: aiosqlite.Connection,
+    pipeline_id: str,
+    *,
+    status: PipelineStatus,
+    error: str | None = None,
+) -> None:
+    fields = ["status = ?", "updated_at = ?"]
+    args: list[Any] = [status.value, utcnow_iso()]
+    if error is not None:
+        fields.append("error = ?")
+        args.append(error)
+    args.append(pipeline_id)
+    await conn.execute(
+        f"UPDATE pipelines SET {', '.join(fields)} WHERE id = ?", args
+    )
+    await conn.commit()
+
+
+async def update_stage(
+    conn: aiosqlite.Connection,
+    pipeline_id: str,
+    stage_name: str,
+    *,
+    status: StageStatus | None = None,
+    experiment_id: str | None = None,
+    output_dir: str | None = None,
+    error: str | None = None,
+) -> None:
+    fields: list[str] = []
+    args: list[Any] = []
+    if status is not None:
+        fields.append("status = ?")
+        args.append(status.value)
+        if status == StageStatus.RUNNING:
+            fields.append("started_at = ?")
+            args.append(utcnow_iso())
+        if status in (
+            StageStatus.COMPLETED,
+            StageStatus.FAILED,
+            StageStatus.CANCELLED,
+            StageStatus.SKIPPED,
+        ):
+            fields.append("finished_at = ?")
+            args.append(utcnow_iso())
+    if experiment_id is not None:
+        fields.append("experiment_id = ?")
+        args.append(experiment_id)
+    if output_dir is not None:
+        fields.append("output_dir = ?")
+        args.append(output_dir)
+    if error is not None:
+        fields.append("error = ?")
+        args.append(error)
+    if not fields:
+        return
+    args.extend([pipeline_id, stage_name])
+    await conn.execute(
+        f"UPDATE pipeline_stages SET {', '.join(fields)} "
+        f"WHERE pipeline_id = ? AND stage_name = ?",
+        args,
+    )
+    await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Watches (Phase 17)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_watch(row: aiosqlite.Row) -> Watch:
+    return Watch(
+        id=row["id"],
+        name=row["name"],
+        kind=row["kind"],
+        enabled=bool(row["enabled"]),
+        interval_seconds=row["interval_seconds"],
+        model_name=row["model_name"],
+        suite_id=row["suite_id"],
+        metric_name=row["metric_name"],
+        threshold=row["threshold"],
+        pipeline_config=PipelineConfig.model_validate_json(
+            row["pipeline_config_json"]
+        ),
+        last_fired_at=(
+            datetime.fromisoformat(row["last_fired_at"])
+            if row["last_fired_at"]
+            else None
+        ),
+        last_fired_pipeline_id=row["last_fired_pipeline_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+async def create_watch(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    kind: str,
+    pipeline_config: PipelineConfig,
+    interval_seconds: int | None = None,
+    model_name: str | None = None,
+    suite_id: str | None = None,
+    metric_name: str | None = None,
+    threshold: float | None = None,
+    watch_id: str | None = None,
+) -> str:
+    if watch_id is None:
+        watch_id = uuid.uuid4().hex
+    await conn.execute(
+        "INSERT INTO watches (id, name, kind, enabled, interval_seconds, "
+        "model_name, suite_id, metric_name, threshold, pipeline_config_json, "
+        "created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            watch_id,
+            name,
+            kind,
+            interval_seconds,
+            model_name,
+            suite_id,
+            metric_name,
+            threshold,
+            pipeline_config.model_dump_json(),
+            utcnow_iso(),
+        ),
+    )
+    await conn.commit()
+    return watch_id
+
+
+async def get_watch(
+    conn: aiosqlite.Connection, watch_id: str
+) -> Watch | None:
+    cur = await conn.execute("SELECT * FROM watches WHERE id = ?", (watch_id,))
+    row = await cur.fetchone()
+    return _row_to_watch(row) if row else None
+
+
+async def list_watches(
+    conn: aiosqlite.Connection, *, only_enabled: bool = False
+) -> list[Watch]:
+    sql = "SELECT * FROM watches"
+    if only_enabled:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY created_at DESC"
+    cur = await conn.execute(sql)
+    rows = await cur.fetchall()
+    return [_row_to_watch(r) for r in rows]
+
+
+async def set_watch_enabled(
+    conn: aiosqlite.Connection, watch_id: str, enabled: bool
+) -> bool:
+    cur = await conn.execute(
+        "UPDATE watches SET enabled = ? WHERE id = ?",
+        (1 if enabled else 0, watch_id),
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def record_watch_fire(
+    conn: aiosqlite.Connection, watch_id: str, pipeline_id: str
+) -> None:
+    await conn.execute(
+        "UPDATE watches SET last_fired_at = ?, last_fired_pipeline_id = ? "
+        "WHERE id = ?",
+        (utcnow_iso(), pipeline_id, watch_id),
+    )
+    await conn.commit()
+
+
+async def delete_watch(conn: aiosqlite.Connection, watch_id: str) -> bool:
+    cur = await conn.execute(
+        "DELETE FROM watches WHERE id = ?", (watch_id,)
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Model lineage (Phase 15)
+# ---------------------------------------------------------------------------
+
+
+async def record_model_lineage(
+    conn: aiosqlite.Connection, model_id: str, dataset_ids: list[str]
+) -> int:
+    """Insert one row per (model, dataset). Idempotent via UPSERT — re-
+    registering the same model is harmless."""
+    now = utcnow_iso()
+    for ds_id in dataset_ids:
+        await conn.execute(
+            "INSERT INTO model_lineage (model_id, dataset_id, used_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(model_id, dataset_id) DO NOTHING",
+            (model_id, ds_id, now),
+        )
+    await conn.commit()
+    return len(dataset_ids)
+
+
+async def models_using_dataset(
+    conn: aiosqlite.Connection, dataset_id: str
+) -> list[str]:
+    cur = await conn.execute(
+        "SELECT model_id FROM model_lineage WHERE dataset_id = ?",
+        (dataset_id,),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+async def datasets_used_by_model(
+    conn: aiosqlite.Connection, model_id: str
+) -> list[str]:
+    cur = await conn.execute(
+        "SELECT dataset_id FROM model_lineage WHERE model_id = ?",
+        (model_id,),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+async def datasets_by_paths(
+    conn: aiosqlite.Connection, paths: list[str]
+) -> dict[str, str]:
+    """Return ``{path: dataset_id}`` for any registered dataset whose
+    on-disk path matches one of ``paths``. Used by the model-register
+    flow to populate ``model_lineage`` from the spec's resolved paths.
+    """
+    if not paths:
+        return {}
+    placeholders = ",".join("?" for _ in paths)
+    cur = await conn.execute(
+        f"SELECT id, path FROM datasets WHERE path IN ({placeholders})",
+        paths,
+    )
+    rows = await cur.fetchall()
+    return {r["path"]: r["id"] for r in rows}
+
+
+async def active_models_referencing_experiment(
+    conn: aiosqlite.Connection, experiment_id: str
+) -> list[str]:
+    """Model ids that still point at ``experiment_id``.
+
+    Mirrors ``active_experiments_referencing_path`` for datasets. Callers
+    use this to block experiment delete when registered models would be
+    orphaned.
+    """
+    cur = await conn.execute(
+        "SELECT id FROM models WHERE experiment_id = ?", (experiment_id,)
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+async def get_model(
+    conn: aiosqlite.Connection, model_id: str
+) -> RegisteredModel | None:
+    cur = await conn.execute("SELECT * FROM models WHERE id = ?", (model_id,))
+    row = await cur.fetchone()
+    return await _row_to_registered_model(conn, row) if row else None
+
+
+async def get_model_by_name_version(
+    conn: aiosqlite.Connection, name: str, version: int
+) -> RegisteredModel | None:
+    cur = await conn.execute(
+        "SELECT * FROM models WHERE name = ? AND version = ?",
+        (name, version),
+    )
+    row = await cur.fetchone()
+    return await _row_to_registered_model(conn, row) if row else None
+
+
+async def list_models(
+    conn: aiosqlite.Connection,
+    *,
+    name: str | None = None,
+    alias: str | None = None,
+) -> list[RegisteredModel]:
+    sql = "SELECT m.* FROM models m"
+    args: list[Any] = []
+    where: list[str] = []
+    if alias:
+        sql += " JOIN model_aliases a ON a.model_id = m.id AND a.alias = ?"
+        args.append(alias)
+    if name:
+        where.append("m.name = ?")
+        args.append(name)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY m.name, m.version DESC"
+    cur = await conn.execute(sql, args)
+    rows = await cur.fetchall()
+    return [await _row_to_registered_model(conn, r) for r in rows]
+
+
+async def list_models_by_name(
+    conn: aiosqlite.Connection, name: str
+) -> list[RegisteredModel]:
+    return await list_models(conn, name=name)
+
+
+async def resolve_model_alias(
+    conn: aiosqlite.Connection, name: str, alias: str
+) -> RegisteredModel | None:
+    cur = await conn.execute(
+        "SELECT m.* FROM models m JOIN model_aliases a ON a.model_id = m.id "
+        "WHERE a.name = ? AND a.alias = ?",
+        (name, alias),
+    )
+    row = await cur.fetchone()
+    return await _row_to_registered_model(conn, row) if row else None
+
+
+async def set_model_alias(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    alias: str,
+    model_id: str,
+) -> None:
+    """Assign or move an alias within a model family. UPSERT semantics."""
+    await conn.execute(
+        "INSERT INTO model_aliases (name, alias, model_id, updated_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(name, alias) DO UPDATE SET model_id = excluded.model_id, "
+        "updated_at = excluded.updated_at",
+        (name, alias, model_id, utcnow_iso()),
+    )
+    await conn.commit()
+
+
+async def delete_model_alias(
+    conn: aiosqlite.Connection, name: str, alias: str
+) -> bool:
+    cur = await conn.execute(
+        "DELETE FROM model_aliases WHERE name = ? AND alias = ?",
+        (name, alias),
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def delete_model(conn: aiosqlite.Connection, model_id: str) -> bool:
+    cur = await conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
+    await conn.commit()
+    return cur.rowcount > 0
 
 
 async def recover_eval_runs(conn: aiosqlite.Connection) -> int:

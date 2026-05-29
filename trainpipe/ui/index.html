@@ -43,7 +43,7 @@
 
     <!-- Tabs (scroll-x on narrow phones) -->
     <nav class="max-w-screen-xl mx-auto px-2 sm:px-4 pb-0 flex gap-1 overflow-x-auto scrollbar-thin">
-      <template x-for="t in ['experiments','studies','evals','datasets','gpus']" :key="t">
+      <template x-for="t in ['experiments','studies','evals','models','playground','datasets','gpus']" :key="t">
         <button @click="tab = t"
                 :class="tab === t ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'"
                 class="shrink-0 px-3 sm:px-4 py-2.5 sm:py-2 rounded-t text-sm capitalize">
@@ -190,9 +190,14 @@
     <section x-show="tab === 'datasets'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Datasets</h2>
-        <button @click="openUploadDataset()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
-          + Upload
-        </button>
+        <div class="flex gap-2">
+          <button @click="openLsImport()" class="border border-slate-300 text-slate-700 text-sm px-3 py-2 rounded hover:bg-slate-50">
+            ⇲ Label Studio
+          </button>
+          <button @click="openUploadDataset()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
+            + Upload
+          </button>
+        </div>
       </div>
 
       <div class="bg-white rounded-lg shadow overflow-x-auto">
@@ -212,7 +217,13 @@
               <tr class="border-t hover:bg-slate-50">
                 <td class="px-3 py-2 font-medium">
                   <div class="flex flex-col">
-                    <span x-text="d.name"></span>
+                    <div class="flex items-center gap-2">
+                      <span x-text="d.name"></span>
+                      <template x-for="kind in (d.media_kinds || [])" :key="kind">
+                        <span class="inline-block bg-purple-100 text-purple-800 rounded px-1.5 py-0.5 text-xs"
+                              x-text="kind === 'images' ? '🖼️ images' : kind === 'videos' ? '🎬 videos' : kind"></span>
+                      </template>
+                    </div>
                     <span class="text-slate-400 text-xs md:hidden"
                           x-text="d.format + ' · ' + (d.line_count ?? '—') + ' rows · ' + fmtBytes(d.size_bytes)"></span>
                   </div>
@@ -358,6 +369,140 @@
       </div>
     </section>
 
+    <!-- ── Playground tab ─────────────────────────────────────────── -->
+    <section x-show="tab === 'playground'">
+      <h2 class="text-lg font-semibold mb-3">Playground</h2>
+      <div class="bg-white rounded-lg shadow p-4 space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">model ref A</label>
+            <input x-model="playground.refA" list="model-refs"
+                   placeholder="base:Qwen/Qwen2-0.5B  /  invoice@production  /  exp:abc..."
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block flex items-center justify-between">
+              <span>model ref B (optional, for compare)</span>
+              <button @click="playground.refB = ''" x-show="playground.refB" class="text-xs text-slate-400 hover:underline">clear</button>
+            </label>
+            <input x-model="playground.refB" list="model-refs"
+                   placeholder="leave blank for single-model mode"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono" />
+          </div>
+        </div>
+        <datalist id="model-refs">
+          <template x-for="m in models" :key="m.id">
+            <option :value="m.name + '@' + m.version" x-text="m.name + ' v' + m.version"></option>
+          </template>
+          <template x-for="m in models.filter(m => m.aliases.length)" :key="m.id + 'a'">
+            <option :value="m.name + '@' + m.aliases[0]" x-text="m.name + ' @' + m.aliases[0]"></option>
+          </template>
+        </datalist>
+        <div>
+          <label class="text-xs text-slate-600 block">prompt</label>
+          <textarea x-model="playground.prompt" rows="6"
+                    class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono"
+                    placeholder="Type a prompt..."></textarea>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">max_new_tokens</label>
+            <input type="number" min="1" max="8192" x-model.number="playground.maxNewTokens"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">temperature</label>
+            <input type="number" min="0" max="2" step="0.1" x-model.number="playground.temperature"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">top_p</label>
+            <input type="number" min="0" max="1" step="0.05" x-model.number="playground.topP"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button @click="runPlayground()" :disabled="playground.running || !playground.prompt"
+                  class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+            <span x-show="!playground.running">Run</span>
+            <span x-show="playground.running">Running…</span>
+          </button>
+        </div>
+        <div x-show="playground.error" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="playground.error"></div>
+        <div class="grid gap-3"
+             :class="playground.results.length > 1 ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'">
+          <template x-for="r in playground.results" :key="r.model_ref">
+            <div class="border rounded p-3">
+              <div class="text-xs text-slate-500 mb-1">
+                <span class="font-mono" x-text="r.model_ref"></span>
+                <span class="text-slate-400" x-text="' (' + r.base_model + (r.adapter_path ? ' + adapter' : '') + ')'"></span>
+              </div>
+              <pre class="whitespace-pre-wrap text-sm" x-text="r.prediction"></pre>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Models tab ─────────────────────────────────────────────── -->
+    <section x-show="tab === 'models'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Models</h2>
+        <button @click="openRegisterModel()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
+          + Register
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Version</th>
+              <th class="px-3 py-2">Aliases</th>
+              <th class="px-3 py-2 hidden md:table-cell">Base model</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Best eval</th>
+              <th class="px-3 py-2 hidden lg:table-cell">Created</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="m in models" :key="m.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex flex-col">
+                    <span x-text="m.name"></span>
+                    <span class="text-slate-400 text-xs font-mono" x-text="m.id.slice(0,10) + '…'"></span>
+                  </div>
+                </td>
+                <td class="px-3 py-2"><span class="font-mono text-xs">v<span x-text="m.version"></span></span></td>
+                <td class="px-3 py-2">
+                  <template x-for="a in m.aliases" :key="a">
+                    <span class="inline-block rounded px-2 py-0.5 mr-1 text-xs"
+                          :class="a === 'production' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
+                          x-text="a"></span>
+                  </template>
+                </td>
+                <td class="px-3 py-2 text-slate-600 text-xs font-mono hidden md:table-cell" x-text="m.base_model"></td>
+                <td class="px-3 py-2 text-xs hidden lg:table-cell" x-text="modelBestEval(m)"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(m.created_at)"></td>
+                <td class="px-3 py-2 text-right">
+                  <button @click="openSetAlias(m)" class="text-cyan-700 hover:underline text-xs mr-2">Alias</button>
+                  <button @click="deleteModel(m)" class="text-rose-600 hover:underline text-xs">Delete</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="models.length === 0">
+              <td colspan="7" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No registered models yet. Train an experiment to completion and click + Register.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- ── GPUs tab ────────────────────────────────────────────────── -->
     <section x-show="tab === 'gpus'">
       <h2 class="text-lg font-semibold mb-3">GPUs</h2>
@@ -416,12 +561,24 @@
           <label class="text-xs text-slate-600 block">model</label>
           <input x-model="expDraft.model" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
         </div>
-        <div>
-          <label class="text-xs text-slate-600 block">sft_type</label>
-          <select x-model="expDraft.sft_type" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
-            <option>lora</option><option>full</option><option>qlora</option>
-            <option>longlora</option><option>adalora</option><option>ia3</option>
-          </select>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">training type</label>
+            <select x-model="expDraft.train_kind" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option value="sft">SFT (instruction tuning)</option>
+              <option value="dpo">DPO</option>
+              <option value="kto">KTO</option>
+              <option value="ppo">PPO</option>
+              <option value="grpo">GRPO</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">sft_type (adapter)</label>
+            <select x-model="expDraft.sft_type" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option>lora</option><option>full</option><option>qlora</option>
+              <option>longlora</option><option>adalora</option><option>ia3</option>
+            </select>
+          </div>
         </div>
         <div>
           <label class="text-xs text-slate-600 block">
@@ -488,6 +645,143 @@
     </div>
   </div>
 
+  <!-- ── Register model modal ─────────────────────────────────────── -->
+  <div x-show="registerModelOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="registerModelOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Register model</h3>
+        <button @click="registerModelOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3">
+        <div>
+          <label class="text-xs text-slate-600 block">name (family)</label>
+          <input x-model="modelDraft.name" placeholder="invoice-extractor"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">experiment (only completed ones)</label>
+          <select x-model="modelDraft.experiment_id"
+                  class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+            <option value="">— select —</option>
+            <template x-for="e in completedExperiments()" :key="e.id">
+              <option :value="e.id" x-text="(e.spec.name || e.id.slice(0,8)) + ' — ' + e.spec.model"></option>
+            </template>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">alias (optional)</label>
+          <input x-model="modelDraft.alias" placeholder="staging / production"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">description (optional)</label>
+          <input x-model="modelDraft.description"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="modelDraft.alias === 'production' && productionEvalWarning"
+             class="text-sm text-amber-800 bg-amber-50 border border-amber-200 p-2 rounded"
+             x-text="productionEvalWarning"></div>
+        <div x-show="modelError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="modelError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="registerModelOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitRegisterModel()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          Register
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Set alias modal ──────────────────────────────────────────── -->
+  <div x-show="aliasOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="aliasOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Set alias</h3>
+        <button @click="aliasOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <div class="text-slate-600">
+          Move alias on
+          <span class="font-mono" x-text="aliasDraft.name + ' v' + aliasDraft.version"></span>.
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">alias</label>
+          <input x-model="aliasDraft.alias"
+                 placeholder="production / staging / canary"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="aliasError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="aliasError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="aliasOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitSetAlias()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          Apply
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Label Studio import modal ─────────────────────────────────── -->
+  <div x-show="lsImportOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="lsImportOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Import from Label Studio</h3>
+        <button @click="lsImportOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <div>
+          <label class="text-xs text-slate-600 block">base url</label>
+          <input x-model="lsDraft.base_url" placeholder="https://ls.example.com"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">API token</label>
+          <input type="password" x-model="lsDraft.token" autocomplete="off"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-600 block">project_id</label>
+            <input type="number" min="1" x-model.number="lsDraft.project_id"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">import kind (optional)</label>
+            <select x-model="lsDraft.import_kind"
+                    class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option value="">auto-detect</option>
+              <option value="conversation">conversation</option>
+              <option value="text_ner">text_ner</option>
+              <option value="doc_layout">doc_layout</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">dataset name</label>
+          <input x-model="lsDraft.name"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="lsError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="lsError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="lsImportOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitLsImport()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Import</span>
+          <span x-show="submitting">Importing…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Upload dataset modal ──────────────────────────────────────── -->
   <div x-show="uploadOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
        @click.self="uploadOpen = false">
@@ -538,6 +832,9 @@
           <button x-show="detail && (detail.status === 'queued' || detail.status === 'running')"
                   @click="cancelExp(detail.id)"
                   class="text-rose-600 hover:underline text-sm">Cancel</button>
+          <button x-show="detail && detail.status === 'completed'"
+                  @click="closeDetail(); openRegisterModel(detail.id)"
+                  class="text-emerald-700 hover:underline text-sm">Register as model</button>
           <a x-show="detail?.mlflow_run_id && mlflowUrl"
              :href="mlflowRunUrl(detail)"
              target="_blank" class="text-cyan-700 hover:underline text-sm">MLflow ↗</a>
@@ -820,6 +1117,26 @@ function trainpipe() {
     evalSuites: [],
     evalRuns: [],
     selectedRunIds: [],
+    models: [],
+    registerModelOpen: false,
+    modelDraft: { name: '', experiment_id: '', alias: '', description: '' },
+    modelError: '',
+    productionEvalWarning: '',
+    aliasOpen: false,
+    aliasDraft: { name: '', version: 1, alias: '', model_id: '' },
+    aliasError: '',
+
+    playground: {
+      refA: 'base:Qwen/Qwen2.5-0.5B-Instruct',
+      refB: '',
+      prompt: '',
+      maxNewTokens: 256,
+      temperature: 0.0,
+      topP: 1.0,
+      running: false,
+      error: '',
+      results: [],
+    },
     createSuiteOpen: false,
     suiteDraft: '',
     suiteError: '',
@@ -829,7 +1146,7 @@ function trainpipe() {
 
     submitExpOpen: false,
     expDraft: { name: '', model: 'Qwen/Qwen2.5-0.5B-Instruct', sft_type: 'lora',
-                gpu_count: 1, dataset: '', val_dataset: '',
+                train_kind: 'sft', gpu_count: 1, dataset: '', val_dataset: '',
                 hyperparameters: '{"num_train_epochs":1,"per_device_train_batch_size":1,"logging_steps":1,"max_length":512,"lora_rank":8}' },
     expError: '',
 
@@ -840,6 +1157,10 @@ function trainpipe() {
     uploadOpen: false,
     uploadDraft: { name: '', description: '', file: null },
     uploadError: '',
+
+    lsImportOpen: false,
+    lsDraft: { base_url: '', token: '', project_id: 1, import_kind: '', name: '' },
+    lsError: '',
 
     // ── lifecycle ──────────────────────────────────────────────
     async init() {
@@ -896,6 +1217,7 @@ function trainpipe() {
         this.api('/gpus').then(r => this.gpus = r).catch(() => {}),
         this.api('/evals/suites').then(r => this.evalSuites = r).catch(() => {}),
         this.api('/evals/runs?limit=200').then(r => this.evalRuns = r).catch(() => {}),
+        this.api('/models').then(r => this.models = r).catch(() => {}),
       ];
       await Promise.all(tasks);
     },
@@ -919,6 +1241,7 @@ function trainpipe() {
         name: this.expDraft.name || null,
         model: this.expDraft.model,
         sft_type: this.expDraft.sft_type,
+        train_kind: this.expDraft.train_kind || 'sft',
         dataset: this.expDraft.dataset.split('\n').map(s => s.trim()).filter(Boolean),
         val_dataset: this.expDraft.val_dataset.split('\n').map(s => s.trim()).filter(Boolean),
         gpu_count: this.expDraft.gpu_count,
@@ -1161,6 +1484,196 @@ function trainpipe() {
       return Object.entries(run.aggregate)
         .map(([k, v]) => `${k}=${(v.mean ?? 0).toFixed(3)}`)
         .join('  ');
+    },
+
+    // ── models ────────────────────────────────────────────────
+    completedExperiments() {
+      return this.experiments.filter(e => e.status === 'completed');
+    },
+    openRegisterModel(prefillExperimentId) {
+      this.modelError = '';
+      this.productionEvalWarning = '';
+      this.modelDraft = {
+        name: '',
+        experiment_id: prefillExperimentId || '',
+        alias: '',
+        description: '',
+      };
+      this.registerModelOpen = true;
+    },
+    async submitRegisterModel() {
+      this.modelError = '';
+      if (!this.modelDraft.name || !this.modelDraft.experiment_id) {
+        this.modelError = 'name and experiment are required';
+        return;
+      }
+      // Pre-flight check for the production-without-evals warning.
+      if (this.modelDraft.alias === 'production') {
+        const exp = this.experiments.find(e => e.id === this.modelDraft.experiment_id);
+        const hasEval = exp && this.evalRuns.some(
+          r => r.experiment_id === exp.id && r.status === 'completed'
+        );
+        if (!hasEval && !this.productionEvalWarning) {
+          this.productionEvalWarning =
+            'No completed eval runs found for this experiment. ' +
+            'Promoting to production without eval evidence is allowed but discouraged. ' +
+            'Click Register again to confirm.';
+          return;
+        }
+      }
+      this.submitting = true;
+      try {
+        const payload = {
+          name: this.modelDraft.name,
+          experiment_id: this.modelDraft.experiment_id,
+        };
+        if (this.modelDraft.alias) payload.alias = this.modelDraft.alias;
+        if (this.modelDraft.description) payload.description = this.modelDraft.description;
+        await this.api('/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.registerModelOpen = false;
+        this.flash('Registered');
+        this.refreshAll();
+      } catch (e) {
+        this.modelError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+    openSetAlias(model) {
+      this.aliasError = '';
+      this.aliasDraft = {
+        name: model.name,
+        version: model.version,
+        model_id: model.id,
+        alias: '',
+      };
+      this.aliasOpen = true;
+    },
+    async submitSetAlias() {
+      this.aliasError = '';
+      if (!this.aliasDraft.alias) {
+        this.aliasError = 'alias is required';
+        return;
+      }
+      this.submitting = true;
+      try {
+        await this.api(
+          `/models/${encodeURIComponent(this.aliasDraft.name)}/aliases/${encodeURIComponent(this.aliasDraft.alias)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_id: this.aliasDraft.model_id }),
+          }
+        );
+        this.aliasOpen = false;
+        this.flash('Alias applied');
+        this.refreshAll();
+      } catch (e) {
+        this.aliasError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+    async deleteModel(model) {
+      if (!confirm(`Delete model ${model.name} v${model.version}?`)) return;
+      const url = `/models/${model.id}` + (model.aliases?.length ? '?force=true' : '');
+      try {
+        await this.api(url, { method: 'DELETE' });
+        this.flash('Deleted');
+        this.refreshAll();
+      } catch (e) { this.flash('Delete failed: ' + e.message); }
+    },
+    modelBestEval(model) {
+      if (!model || !model.eval_summary) return '—';
+      const flat = [];
+      for (const [suite, metrics] of Object.entries(model.eval_summary)) {
+        for (const [m, v] of Object.entries(metrics || {})) {
+          flat.push(`${m}=${Number(v).toFixed(3)}`);
+        }
+      }
+      return flat.slice(0, 3).join('  ') || '—';
+    },
+
+    // ── label studio import ────────────────────────────────────
+    openLsImport() {
+      this.lsError = '';
+      this.lsImportOpen = true;
+    },
+    async submitLsImport() {
+      this.lsError = '';
+      if (!this.lsDraft.base_url || !this.lsDraft.token || !this.lsDraft.name) {
+        this.lsError = 'base_url, token, and name are required';
+        return;
+      }
+      this.submitting = true;
+      try {
+        const payload = {
+          base_url: this.lsDraft.base_url,
+          token: this.lsDraft.token,
+          project_id: this.lsDraft.project_id,
+          name: this.lsDraft.name,
+        };
+        if (this.lsDraft.import_kind) payload.import_kind = this.lsDraft.import_kind;
+        await this.api('/datasets/from-labelstudio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.lsImportOpen = false;
+        this.flash('Imported');
+        this.refreshAll();
+      } catch (e) {
+        this.lsError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    // ── playground ─────────────────────────────────────────────
+    async runPlayground() {
+      this.playground.error = '';
+      this.playground.results = [];
+      const refs = [this.playground.refA, this.playground.refB]
+        .map(s => s.trim()).filter(Boolean);
+      if (refs.length === 0) {
+        this.playground.error = 'enter at least one model ref';
+        return;
+      }
+      const params = {
+        max_new_tokens: this.playground.maxNewTokens,
+        temperature: this.playground.temperature,
+        top_p: this.playground.topP,
+      };
+      this.playground.running = true;
+      try {
+        if (refs.length === 1) {
+          const body = await this.api('/inferences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model_ref: refs[0], prompt: this.playground.prompt, params,
+            }),
+          });
+          this.playground.results = [body];
+        } else {
+          const body = await this.api('/inferences/compare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model_refs: refs, prompt: this.playground.prompt, params,
+            }),
+          });
+          this.playground.results = body.results;
+        }
+      } catch (e) {
+        this.playground.error = e.message;
+      } finally {
+        this.playground.running = false;
+      }
     },
 
     // ── helpers ────────────────────────────────────────────────

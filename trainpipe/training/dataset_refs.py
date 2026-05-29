@@ -13,7 +13,7 @@ import aiosqlite
 from ..api.schemas import ExperimentSpec
 from ..core import repository
 
-_REF = re.compile(r"^ds:([0-9a-fA-F]+)(#.*)?$")
+_REF = re.compile(r"^ds:([0-9a-fA-F]+)(@v\d+)?(#.*)?$")
 
 
 class UnknownDatasetRef(ValueError):
@@ -29,11 +29,28 @@ class MalformedDatasetRef(ValueError):
 
 
 def parse_ref(s: str) -> tuple[str, str] | None:
-    """Return ``(dataset_id, suffix)`` or None if ``s`` is not a ref."""
+    """Return ``(dataset_id, suffix)`` or None if ``s`` is not a ref.
+
+    The ``@vN`` segment is stripped here and validated against the actual
+    persisted ``version`` in ``resolve_single`` — keeping the regex match
+    permissive lets the resolver give a clearer error than "malformed".
+    The suffix returned here always starts with ``#`` (or is empty).
+    """
     m = _REF.match(s)
     if not m:
         return None
-    return m.group(1), m.group(2) or ""
+    return m.group(1), m.group(3) or ""
+
+
+def parse_ref_with_version(s: str) -> tuple[str, int | None, str] | None:
+    """Return ``(dataset_id, version_or_None, suffix)`` for ``ds:<id>@vN#K``."""
+    m = _REF.match(s)
+    if not m:
+        return None
+    version: int | None = None
+    if m.group(2):
+        version = int(m.group(2)[2:])
+    return m.group(1), version, m.group(3) or ""
 
 
 def is_ref(s: str) -> bool:
@@ -50,21 +67,29 @@ async def _resolve_list(
 
 
 async def resolve_single(raw: str, conn: aiosqlite.Connection) -> str:
-    """Resolve a single ``ds:<id>(#suffix)?`` ref to its filesystem path.
+    """Resolve a single ``ds:<id>(@vN)?(#suffix)?`` ref to its filesystem path.
 
     Non-ref strings (anything that doesn't start with ``ds:``) are passed
     through unchanged. ``ds:``-prefixed strings that don't match the ref
-    grammar raise :class:`MalformedDatasetRef`.
+    grammar raise :class:`MalformedDatasetRef`. If a ``@vN`` segment is
+    present, it must match the dataset's persisted ``version``.
     """
-    parsed = parse_ref(raw)
+    parsed = parse_ref_with_version(raw)
     if parsed is None:
         if raw.startswith("ds:"):
             raise MalformedDatasetRef(raw)
         return raw
-    ds_id, suffix = parsed
+    ds_id, requested_version, suffix = parsed
     rec = await repository.get_dataset(conn, ds_id)
     if rec is None:
         raise UnknownDatasetRef(ds_id)
+    if requested_version is not None and rec.version != requested_version:
+        # Wrong version — surface as malformed with a clear message rather
+        # than silently using a different version's file. Eventually this
+        # should be a separate VersionMismatch error class.
+        raise MalformedDatasetRef(
+            f"{raw} (registered version is v{rec.version})"
+        )
     return f"{rec.path}{suffix}"
 
 

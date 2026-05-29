@@ -6,6 +6,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SFTType = Literal["lora", "full", "qlora", "longlora", "adalora", "ia3"]
 
+# Phase 13 — high-level training mode. SFT is the default
+# instruction-tuning path; the *PO family runs via ``swift rlhf`` with
+# the matching ``--rlhf_type``.
+TrainKind = Literal["sft", "dpo", "kto", "ppo", "grpo"]
+
 
 class ExperimentStatus(str, Enum):
     QUEUED = "queued"
@@ -53,6 +58,32 @@ class MultimodalSettings(BaseModel):
     max_pixels: int = 602112
 
 
+class DistributedConfig(BaseModel):
+    """Distributed training settings (Phase 18).
+
+    ``deepspeed_zero_stage``: 0 → off; 1/2/3 → enable ZeRO at that stage
+    via ``--deepspeed_zero<N>`` to ms-swift. Stage 3 is most aggressive
+    (partitions parameters + grads + optimizer states across GPUs).
+
+    ``num_nodes`` > 1 + ``host_list``: switches the launcher to
+    ``torchrun`` with the appropriate ``--nnodes`` / ``--node_rank``;
+    actual multi-host orchestration (SSH spawn on every host) lives at
+    the operator level today — the spec records intent, the scheduler
+    surfaces it as an env variable so the operator's launcher can pick
+    it up. Full Kubernetes-managed distribution is out of scope.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    deepspeed_zero_stage: int = Field(0, ge=0, le=3)
+    num_nodes: int = Field(1, ge=1, le=64)
+    # SSH hosts in torchrun order. Empty for single-host runs.
+    host_list: list[str] = Field(default_factory=list)
+    # Master address for multi-node; required when num_nodes > 1.
+    master_addr: str | None = None
+    master_port: int = Field(29500, ge=1024, le=65535)
+
+
 class ExperimentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -62,6 +93,8 @@ class ExperimentSpec(BaseModel):
     model: str
     model_type: str | None = None
     sft_type: SFTType = "lora"
+    # Phase 13. Default ``sft`` keeps old specs working unchanged.
+    train_kind: TrainKind = "sft"
 
     # NB: not enforcing min_length=1 here. Historical rows in the DB may
     # have been written with an empty list (pre-validation), and re-reading
@@ -75,6 +108,18 @@ class ExperimentSpec(BaseModel):
 
     hyperparameters: TrainingHyperparameters = Field(default_factory=TrainingHyperparameters)
     multimodal: MultimodalSettings | None = None
+    distributed: DistributedConfig | None = None
+    # Phase 21: domain vocab extension. Each entry is added as a special
+    # token via ms-swift's ``--special_tokens`` flag; the model's
+    # embedding layer is resized accordingly.
+    extra_tokens: list[str] = Field(
+        default_factory=list,
+        max_length=10000,
+        description=(
+            "Additional special tokens for the tokenizer (e.g. "
+            '["[INV_HEAD]", "[INV_FOOT]"]). Resizes the embedding layer.'
+        ),
+    )
 
     extra_args: dict[str, Any] = Field(default_factory=dict)
 
@@ -102,6 +147,10 @@ class ExperimentRecord(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
+    # Phase 20:
+    gpu_seconds: float | None = None
+    peak_vram_mb: float | None = None
+    energy_wh: float | None = None
 
 
 class SearchSpaceEntry(BaseModel):
@@ -154,6 +203,12 @@ class Dataset(BaseModel):
     sha256: str
     description: str | None = None
     created_at: datetime
+    # Phase 9 multimodal:
+    media_kinds: list[str] = Field(default_factory=list)
+    image_root: str | None = None
+    # Phase 16 versioning + derivation:
+    version: int = 1
+    derived_from: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -302,3 +357,220 @@ class EvalComparison(BaseModel):
     runs: list[EvalRun]
     aggregate_delta: dict[str, dict[str, float]]  # metric_name -> {run_id -> mean}
     regressions: list[EvalComparisonSample]  # samples where any run scored lower
+
+
+# ---------------------------------------------------------------------------
+# Model registry (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+class ModelRegisterRequest(BaseModel):
+    """Register an experiment's completed run as a named, versioned model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=200)
+    experiment_id: str = Field(..., min_length=1)
+    description: str | None = None
+    # Optional explicit version; auto-incremented within ``name`` if omitted.
+    version: int | None = Field(None, ge=1)
+    # Optional alias to set after register (e.g. "staging" / "production").
+    alias: str | None = None
+
+
+class RegisteredModel(BaseModel):
+    """A persisted named model version pointing at an experiment's adapter dir."""
+
+    id: str
+    name: str
+    version: int
+    run_id: str | None = None
+    experiment_id: str | None = None
+    base_model: str
+    adapter_path: str | None = None
+    eval_summary: dict[str, Any] | None = None
+    description: str | None = None
+    created_at: datetime
+    aliases: list[str] = Field(default_factory=list)
+
+
+class ModelAlias(BaseModel):
+    name: str
+    alias: str
+    model_id: str
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Active learning (Phase 11)
+# ---------------------------------------------------------------------------
+
+
+class ALRunStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ActiveLearningRunRequest(BaseModel):
+    """Submit an active-learning pass.
+
+    The runner loads the model behind ``model_ref`` (see Phase 8 ref
+    syntax), reads ``dataset_path`` (a ``ds:<id>`` ref or path), scores
+    every sample with the configured ``UncertaintyScorer``, and surfaces
+    the top ``top_n`` as an annotation queue.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_ref: str = Field(..., min_length=1)
+    dataset: str = Field(..., min_length=1, description="ds:<id> or path")
+    top_n: int = Field(50, ge=1, le=10000)
+    sample_limit: int | None = Field(None, ge=1)
+    # "double_pass": two T=0.7 samples + diff
+    # "length_zscore": deviation from mean response length
+    scorer: Literal["double_pass", "length_zscore"] = "double_pass"
+
+
+class ActiveLearningRun(BaseModel):
+    id: str
+    model_ref: str
+    dataset_path: str
+    top_n: int
+    sample_limit: int | None = None
+    status: ALRunStatus
+    error: str | None = None
+    scored_count: int | None = None
+    queued_count: int | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class AnnotationQueueItem(BaseModel):
+    id: int
+    run_id: str
+    sample_index: int
+    input: dict[str, Any]
+    prediction: str
+    uncertainty: float
+    annotated: bool
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Multi-stage pipelines (Phase 12)
+# ---------------------------------------------------------------------------
+
+
+class PipelineStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class StageStatus(str, Enum):
+    PENDING = "pending"
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+
+
+class StageSpec(BaseModel):
+    """One stage of a pipeline.
+
+    ``base_spec`` is a full :class:`ExperimentSpec`. ``input_from_stage``
+    references a sibling stage by name; the driver will rewrite
+    ``base_spec.model`` to point at that stage's adapter dir before
+    enqueuing. ``depends_on`` is the strict-ordering DAG edge.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=64)
+    base_spec: ExperimentSpec
+    depends_on: list[str] = Field(default_factory=list)
+    # Take the adapter dir from this stage and feed it as ``--model`` /
+    # ``--adapter_name_or_path`` for this one. Optional; if omitted the
+    # stage uses ``base_spec.model`` as-is.
+    input_from_stage: str | None = None
+
+
+class PipelineConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=200)
+    stages: list[StageSpec] = Field(..., min_length=1, max_length=16)
+
+
+class PipelineStage(BaseModel):
+    stage_name: str
+    stage_index: int
+    depends_on: list[str] = Field(default_factory=list)
+    experiment_id: str | None = None
+    status: StageStatus
+    output_dir: str | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class Pipeline(BaseModel):
+    id: str
+    name: str
+    status: PipelineStatus
+    config: PipelineConfig
+    stages: list[PipelineStage]
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Watches (Phase 17)
+# ---------------------------------------------------------------------------
+
+
+WatchKind = Literal["interval", "metric_threshold"]
+
+
+class WatchCreateRequest(BaseModel):
+    """Create a watch that fires a pipeline on schedule or on drift."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=200)
+    kind: WatchKind
+    pipeline_config: PipelineConfig
+
+    # Required when kind=interval:
+    interval_seconds: int | None = Field(None, ge=60, le=86400 * 30)
+
+    # Required when kind=metric_threshold:
+    model_name: str | None = None
+    suite_id: str | None = None
+    metric_name: str | None = None
+    threshold: float | None = None
+
+
+class Watch(BaseModel):
+    id: str
+    name: str
+    kind: WatchKind
+    enabled: bool
+    interval_seconds: int | None = None
+    model_name: str | None = None
+    suite_id: str | None = None
+    metric_name: str | None = None
+    threshold: float | None = None
+    pipeline_config: PipelineConfig
+    last_fired_at: datetime | None = None
+    last_fired_pipeline_id: str | None = None
+    created_at: datetime

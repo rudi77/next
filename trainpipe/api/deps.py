@@ -3,6 +3,8 @@ from fastapi import Request
 from ..autoresearch.manager import StudyManager
 from ..core.db import Database
 from ..evals.dispatcher import EvalDispatcher
+from ..inference.service import InferenceService
+from ..pipelines.manager import PipelineManager
 from ..scheduler.gpu_pool import GpuPool
 from ..scheduler.loop import Scheduler
 
@@ -25,3 +27,11 @@ def get_study_manager(request: Request) -> StudyManager:
 
 def get_eval_dispatcher(request: Request) -> EvalDispatcher:
     return request.app.state.eval_dispatcher
+
+
+def get_inference_service(request: Request) -> InferenceService:
+    return request.app.state.inference_service
+
+
+def get_pipeline_manager(request: Request) -> PipelineManager:
+    return request.app.state.pipeline_manager

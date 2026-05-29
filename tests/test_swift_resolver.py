@@ -1,7 +1,6 @@
 """Tests for the swift binary path resolver."""
 
 import sys
-from pathlib import Path
 
 from trainpipe.training import swift_builder
 

@@ -11,9 +11,8 @@ us resume on API restart without rebuilding state.
 
 import asyncio
 import logging
-from typing import Any
 
-from ..api.schemas import ExperimentSpec, ExperimentStatus, StudyConfig, StudyStatus
+from ..api.schemas import ExperimentStatus, StudyConfig, StudyStatus
 from ..core import repository
 from ..core.db import Database
 from ..settings import settings

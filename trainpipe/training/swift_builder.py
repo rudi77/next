@@ -44,7 +44,15 @@ def build_swift_command(
     if not gpu_ids:
         raise ValueError("gpu_ids must contain at least one GPU index")
 
-    argv: list[str] = [_resolve_swift_binary(), "sft"]
+    # Phase 13: switch sub-command for *PO trainers. ``swift rlhf`` is
+    # the entry point for DPO/KTO/PPO/GRPO; everything else stays on
+    # ``swift sft``. The flags after this point are identical across
+    # both — they consume the same ExperimentSpec — except we add
+    # ``--rlhf_type`` for the RLHF family.
+    if spec.train_kind == "sft":
+        argv: list[str] = [_resolve_swift_binary(), "sft"]
+    else:
+        argv = [_resolve_swift_binary(), "rlhf", "--rlhf_type", spec.train_kind]
 
     # ms-swift v4 renamed --model_id_or_path → --model, --sft_type → --tuner_type
     # (and --lora_target_modules → --target_modules below).
@@ -84,6 +92,19 @@ def build_swift_command(
     argv += ["--output_dir", str(output_dir)]
     argv += ["--report_to", "mlflow"]
 
+    # Phase 18: deepspeed ZeRO. ms-swift accepts ``--deepspeed_zero<N>``
+    # for stages 1/2/3 (no-op flag — sets the bundled DS config). Stage 0
+    # means "off" and we don't emit anything.
+    if spec.distributed and spec.distributed.deepspeed_zero_stage in (1, 2, 3):
+        argv.append(f"--deepspeed_zero{spec.distributed.deepspeed_zero_stage}")
+
+    # Phase 21: extend the tokenizer's vocabulary with domain tokens
+    # (e.g. invoice tags, internal product codes). ms-swift accepts
+    # ``--special_tokens`` once per token; the trainer resizes the
+    # embedding layer to match.
+    for tok in spec.extra_tokens:
+        argv += ["--special_tokens", tok]
+
     for k, v in spec.extra_args.items():
         flag = f"--{k}" if not k.startswith("--") else k
         if isinstance(v, bool):
@@ -102,5 +123,18 @@ def build_swift_command(
     if spec.multimodal is not None:
         env["SIZE_FACTOR"] = str(spec.multimodal.size_factor)
         env["MAX_PIXELS"] = str(spec.multimodal.max_pixels)
+
+    # Phase 18: multi-node coordination via env so the operator's
+    # launcher (torchrun, accelerate launch, or the in-house SSH spawn)
+    # can read the intent. The scheduler itself still launches one
+    # process per host today — full Kubernetes-style orchestration is
+    # out of scope.
+    if spec.distributed and spec.distributed.num_nodes > 1:
+        env["NNODES"] = str(spec.distributed.num_nodes)
+        if spec.distributed.master_addr:
+            env["MASTER_ADDR"] = spec.distributed.master_addr
+        env["MASTER_PORT"] = str(spec.distributed.master_port)
+        if spec.distributed.host_list:
+            env["TRAINPIPE_HOST_LIST"] = ",".join(spec.distributed.host_list)
 
     return argv, env

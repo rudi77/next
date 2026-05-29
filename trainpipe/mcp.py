@@ -232,6 +232,158 @@ def delete_dataset(dataset_id: str) -> dict:
     return _unwrap(_get_client().delete(f"/datasets/{dataset_id}"))
 
 
+# ---------------------------------------------------------------------------
+# Model registry (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def register_model(
+    name: str,
+    experiment_id: str,
+    description: str | None = None,
+    version: int | None = None,
+    alias: str | None = None,
+) -> dict:
+    """Register a completed experiment as a named, versioned model.
+
+    ``version`` auto-increments within ``name`` if omitted. Pass ``alias``
+    (e.g. ``"staging"``, ``"production"``) to assign it to the new version
+    in the same call. Fails 422 if the experiment is not ``completed``.
+    """
+    payload: dict[str, Any] = {"name": name, "experiment_id": experiment_id}
+    if description is not None:
+        payload["description"] = description
+    if version is not None:
+        payload["version"] = version
+    if alias is not None:
+        payload["alias"] = alias
+    return _unwrap(_get_client().post("/models", json=payload))
+
+
+@mcp.tool()
+def list_models(
+    name: str | None = None,
+    alias: str | None = None,
+) -> list[dict]:
+    """List registered models, optionally filtered by ``name`` (family) and
+    ``alias`` (e.g. ``"production"`` → only models that currently hold it)."""
+    params: dict[str, Any] = {}
+    if name:
+        params["name"] = name
+    if alias:
+        params["alias"] = alias
+    return _unwrap(_get_client().get("/models", params=params))
+
+
+@mcp.tool()
+def get_model(name: str, ref: str) -> dict:
+    """Resolve a model by family ``name`` + ``ref``.
+
+    ``ref`` may be a numeric version (``"3"``) or an alias (``"production"``).
+    Returns the full RegisteredModel record including ``adapter_path`` and
+    ``aliases`` currently pointing at it.
+    """
+    return _unwrap(_get_client().get(f"/models/{name}/{ref}"))
+
+
+@mcp.tool()
+def set_alias(name: str, alias: str, version: int) -> dict:
+    """Move ``alias`` within model family ``name`` to ``version`` (1-based)."""
+    return _unwrap(
+        _get_client().post(
+            f"/models/{name}/aliases/{alias}",
+            json={"version": version},
+        )
+    )
+
+
+@mcp.tool()
+def delete_model(model_id: str, force: bool = False) -> dict:
+    """Delete a registered model version. Refuses 409 if it still holds any
+    alias unless ``force=True``."""
+    return _unwrap(
+        _get_client().delete(
+            f"/models/{model_id}", params={"force": str(force).lower()}
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Inference (Phase 8)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def inference(model_ref: str, prompt: str, max_new_tokens: int = 512) -> dict:
+    """Run inference against a model ref. Returns ``{prediction, base_model,
+    adapter_path}``.
+
+    ``model_ref`` syntax: ``base:<hf-id>``, ``exp:<experiment_id>``,
+    ``<name>@<alias>``, or ``<name>@<version-int>``.
+    """
+    return _unwrap(
+        _get_client().post(
+            "/inferences",
+            json={
+                "model_ref": model_ref,
+                "prompt": prompt,
+                "params": {"max_new_tokens": max_new_tokens},
+            },
+        )
+    )
+
+
+@mcp.tool()
+def synth_dataset(
+    provider: str,
+    model: str,
+    source_dataset: str,
+    instruction: str,
+    target_count: int,
+    name: str,
+    seed: int = 0,
+    max_tokens: int = 1024,
+) -> dict:
+    """Expand a source dataset via a teacher LLM. Returns the new
+    Dataset record (with ``ds:<id>`` reference) including provenance.
+
+    ``provider``: ``anthropic`` / ``openai`` / ``mock``. ``source_dataset``
+    is either a ``ds:<id>`` ref or a filesystem path."""
+    return _unwrap(
+        _get_client().post(
+            "/synth",
+            json={
+                "provider": provider,
+                "model": model,
+                "source_dataset": source_dataset,
+                "instruction": instruction,
+                "target_count": target_count,
+                "name": name,
+                "seed": seed,
+                "max_tokens": max_tokens,
+            },
+        )
+    )
+
+
+@mcp.tool()
+def inference_compare(
+    model_refs: list[str], prompt: str, max_new_tokens: int = 512
+) -> dict:
+    """Run the same prompt against multiple model refs side-by-side."""
+    return _unwrap(
+        _get_client().post(
+            "/inferences/compare",
+            json={
+                "model_refs": model_refs,
+                "prompt": prompt,
+                "params": {"max_new_tokens": max_new_tokens},
+            },
+        )
+    )
+
+
 def main() -> None:
     """Entrypoint for ``python -m trainpipe.mcp`` and the trainpipe-mcp script."""
     mcp.run()
