@@ -330,3 +330,26 @@ async def delete_dataset(conn: aiosqlite.Connection, dataset_id: str) -> bool:
     cur = await conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
     await conn.commit()
     return cur.rowcount > 0
+
+
+async def active_experiments_referencing_path(
+    conn: aiosqlite.Connection, path: str
+) -> list[str]:
+    """Return ids of non-terminal experiments whose spec references ``path``.
+
+    ``ds:<id>`` refs are resolved to real paths at submit time and frozen into
+    spec_json, so a queued/running experiment carries the bare path (possibly
+    with a ``#N`` subsample suffix). Deleting the underlying dataset would
+    break those jobs at dispatch, so callers use this to guard the delete.
+    """
+    cur = await conn.execute(
+        "SELECT id, spec_json FROM experiments WHERE status IN ('queued', 'running')"
+    )
+    rows = await cur.fetchall()
+    hits: list[str] = []
+    for row in rows:
+        spec = ExperimentSpec.model_validate_json(row["spec_json"])
+        refs = list(spec.dataset) + list(spec.val_dataset)
+        if any(r.split("#", 1)[0] == path for r in refs):
+            hits.append(row["id"])
+    return hits

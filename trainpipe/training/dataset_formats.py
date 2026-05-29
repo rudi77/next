@@ -1,9 +1,11 @@
 """Lightweight format detection + validation for uploaded datasets.
 
 We trust the file extension to pick the parser, then sample the first ~100
-records to ensure the file is well-formed. For JSONL/CSV we also count
-total lines (cheap on a freshly-written file). Parquet validation just
-opens the metadata footer.
+records to ensure the file is well-formed. For JSONL/CSV we also count total
+lines, which means one full pass over the file — combined with the SHA256 pass
+during upload that's two reads of the whole file, so expect upload latency to
+scale with size for multi-GB datasets. Parquet validation just opens the
+metadata footer.
 
 These checks are *not* a schema validator — ms-swift will detect missing
 fields when it actually trains. The point is to fail at upload time when

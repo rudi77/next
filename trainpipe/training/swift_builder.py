@@ -26,9 +26,11 @@ def _resolve_swift_binary() -> str:
     found = shutil.which("swift")
     if found:
         return found
-    venv_bin = Path(sys.executable).parent / "swift"
-    if venv_bin.is_file():
-        return str(venv_bin)
+    bin_dir = Path(sys.executable).parent
+    for candidate in ("swift", "swift.exe"):
+        venv_bin = bin_dir / candidate
+        if venv_bin.is_file():
+            return str(venv_bin)
     return "swift"
 
 

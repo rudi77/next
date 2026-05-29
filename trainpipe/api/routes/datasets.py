@@ -9,7 +9,16 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import PlainTextResponse
 
 from ...core import repository
@@ -38,6 +47,7 @@ def _sanitize_filename(raw: str) -> str:
 @router.post("", status_code=201)
 async def upload_dataset(
     db: Annotated[Database, Depends(get_db)],
+    response: Response,
     file: UploadFile = File(...),
     name: str = Form(...),
     description: str | None = Form(None),
@@ -91,6 +101,18 @@ async def upload_dataset(
     digest = sha.hexdigest()
 
     async with db.connect() as conn:
+        existing = await repository.get_dataset_by_sha(conn, digest)
+        if existing is not None:
+            # Identical content is already registered — drop the freshly
+            # written duplicate and return the existing record (200, not 201)
+            # instead of cloning the file on disk.
+            try:
+                target_path.unlink(missing_ok=True)
+                target_dir.rmdir()
+            except OSError:
+                pass
+            response.status_code = 200
+            return existing
         await repository.create_dataset(
             conn,
             name=name,
@@ -131,7 +153,7 @@ async def get_dataset(
 async def preview_dataset(
     dataset_id: str,
     db: Annotated[Database, Depends(get_db)],
-    n: int = 10,
+    n: int = Query(10, ge=1, le=1000),
 ) -> PlainTextResponse:
     async with db.connect() as conn:
         rec = await repository.get_dataset(conn, dataset_id)
@@ -140,7 +162,8 @@ async def preview_dataset(
     path = Path(rec.path)
     if not path.exists():
         raise HTTPException(410, "dataset file missing on disk")
-    if rec.format in ("jsonl", "ndjson", "csv", "tsv"):
+    if rec.format != "parquet":
+        # Everything except parquet is UTF-8 text we can line-tail.
         lines: list[str] = []
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -157,11 +180,31 @@ async def preview_dataset(
 async def delete_dataset(
     dataset_id: str,
     db: Annotated[Database, Depends(get_db)],
+    force: bool = Query(
+        False,
+        description="Delete even if queued/running experiments reference it.",
+    ),
 ) -> dict[str, bool]:
     async with db.connect() as conn:
         rec = await repository.get_dataset(conn, dataset_id)
         if rec is None:
             raise HTTPException(404, "dataset not found")
+        if not force:
+            blockers = await repository.active_experiments_referencing_path(
+                conn, rec.path
+            )
+            if blockers:
+                raise HTTPException(
+                    409,
+                    {
+                        "error": "dataset_in_use",
+                        "detail": (
+                            "dataset is referenced by active experiments; "
+                            "pass force=true to delete anyway"
+                        ),
+                        "experiment_ids": blockers,
+                    },
+                )
         ok = await repository.delete_dataset(conn, dataset_id)
     if ok:
         path = Path(rec.path)

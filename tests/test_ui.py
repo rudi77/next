@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from trainpipe.api.main import app
+from trainpipe.api.main import _public_mlflow_uri, app
 
 
 def test_ui_root_serves_html():
@@ -29,3 +29,22 @@ def test_ui_config_does_not_leak_api_key():
     body = r.json()
     assert "api_key" not in body
     assert "TRAINPIPE_API_KEY" not in r.text
+
+
+def test_public_mlflow_uri_strips_embedded_credentials(monkeypatch):
+    monkeypatch.setattr(
+        "trainpipe.settings.settings.mlflow_tracking_uri",
+        "http://user:s3cret@mlflow.internal:5000/path",
+    )
+    public = _public_mlflow_uri()
+    assert public == "http://mlflow.internal:5000/path"
+    assert "s3cret" not in public
+    assert "user" not in public
+
+
+def test_public_mlflow_uri_passthrough_when_no_credentials(monkeypatch):
+    monkeypatch.setattr(
+        "trainpipe.settings.settings.mlflow_tracking_uri",
+        "http://mlflow.internal:5000",
+    )
+    assert _public_mlflow_uri() == "http://mlflow.internal:5000"

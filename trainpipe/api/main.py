@@ -1,6 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -13,6 +14,21 @@ from ..settings import settings
 from .routes import datasets, experiments, gpus, studies
 
 _UI_INDEX = Path(__file__).resolve().parent.parent / "ui" / "index.html"
+
+
+def _public_mlflow_uri() -> str:
+    """The tracking URI with any embedded user:password stripped.
+
+    ``/ui/config`` is served unauthenticated, so credentials accidentally
+    baked into the URI (``http://user:pass@host``) must never leak to the SPA.
+    """
+    parts = urlsplit(settings.mlflow_tracking_uri)
+    if parts.username or parts.password:
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+        parts = parts._replace(netloc=netloc)
+    return urlunsplit(parts)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,7 +78,7 @@ async def health() -> dict[str, str]:
 @app.get("/ui/config")
 async def ui_config() -> dict[str, str]:
     """Frontend-safe config (no secrets). Used by the SPA on startup."""
-    return {"mlflow_tracking_uri": settings.mlflow_tracking_uri}
+    return {"mlflow_tracking_uri": _public_mlflow_uri()}
 
 
 @app.get("/", include_in_schema=False)

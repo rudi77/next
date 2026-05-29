@@ -409,6 +409,80 @@ def test_list_and_delete_dataset(state, client, tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
+def test_upload_same_content_dedups_to_existing(state, client, tmp_path, monkeypatch):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    content = b'{"a":1}\n'
+    first = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("a.jsonl", content, "application/x-ndjson")},
+        data={"name": "first"},
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+
+    # Same bytes, different filename/name → dedup to the existing record (200).
+    second = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("b.jsonl", content, "application/x-ndjson")},
+        data={"name": "second"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first_id
+    # Only one row should exist.
+    listing = client.get("/datasets", headers=HEADERS).json()
+    assert sum(1 for d in listing if d["id"] == first_id) == 1
+    assert len(listing) == 1
+
+
+def test_delete_dataset_blocked_when_referenced(state, client, tmp_path, monkeypatch):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    up = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("t.jsonl", b'{"a":1}\n', "application/x-ndjson")},
+        data={"name": "t"},
+    )
+    ds_id = up.json()["id"]
+    # Queued experiment references it → delete must be refused.
+    client.post(
+        "/experiments",
+        headers=HEADERS,
+        json={"model": "m", "dataset": [f"ds:{ds_id}"]},
+    )
+
+    blocked = client.delete(f"/datasets/{ds_id}", headers=HEADERS)
+    assert blocked.status_code == 409
+    detail = blocked.json()["detail"]
+    assert detail["error"] == "dataset_in_use"
+    assert detail["experiment_ids"]
+
+    # force=true overrides.
+    forced = client.delete(f"/datasets/{ds_id}?force=true", headers=HEADERS)
+    assert forced.status_code == 200
+    assert forced.json() == {"deleted": True}
+
+
+def test_preview_rejects_out_of_range_n(state, client, tmp_path, monkeypatch):
+    monkeypatch.setattr("trainpipe.settings.settings.data_dir", tmp_path)
+    up = client.post(
+        "/datasets",
+        headers=HEADERS,
+        files={"file": ("p.jsonl", b'{"a":1}\n{"b":2}\n', "application/x-ndjson")},
+        data={"name": "p"},
+    )
+    ds_id = up.json()["id"]
+    assert client.get(f"/datasets/{ds_id}/preview?n=0", headers=HEADERS).status_code == 422
+    assert (
+        client.get(f"/datasets/{ds_id}/preview?n=99999", headers=HEADERS).status_code
+        == 422
+    )
+    ok = client.get(f"/datasets/{ds_id}/preview?n=1", headers=HEADERS)
+    assert ok.status_code == 200
+    assert ok.text == '{"a":1}'
+
+
 def test_create_study_validates_base_spec_dataset(state, client, tmp_path):
     bad = str(tmp_path / "absent.jsonl")
     r = client.post(

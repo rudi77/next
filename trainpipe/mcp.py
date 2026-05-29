@@ -198,7 +198,7 @@ def upload_dataset(
     """
     try:
         raw = base64.b64decode(content_b64, validate=True)
-    except (ValueError, base64.binascii.Error) as e:
+    except ValueError as e:  # binascii.Error subclasses ValueError
         raise RuntimeError(f"content_b64 is not valid base64: {e}") from None
     files = {"file": (filename, raw, "application/octet-stream")}
     data: dict[str, str] = {"name": name}
