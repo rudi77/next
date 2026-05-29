@@ -63,7 +63,7 @@ class ExperimentSpec(BaseModel):
     model_type: str | None = None
     sft_type: SFTType = "lora"
 
-    dataset: list[str]
+    dataset: list[str] = Field(..., min_length=1)
     val_dataset: list[str] = Field(default_factory=list)
 
     gpu_count: int = Field(1, ge=1, le=8)

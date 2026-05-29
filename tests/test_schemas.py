@@ -46,6 +46,22 @@ def test_experiment_spec_rejects_unknown_keys():
         raise AssertionError("expected ValidationError")
 
 
+def test_experiment_spec_rejects_empty_dataset():
+    """Empty dataset → swift sft would fail with 'Please input the training
+    dataset' after spawning. Cheaper to reject at validation."""
+    import pytest
+
+    with pytest.raises(Exception, match="(?i)dataset"):
+        ExperimentSpec.model_validate({"model": "m", "dataset": []})
+
+
+def test_experiment_spec_rejects_missing_dataset():
+    import pytest
+
+    with pytest.raises(Exception, match="(?i)dataset"):
+        ExperimentSpec.model_validate({"model": "m"})
+
+
 def test_study_config_roundtrip():
     cfg = StudyConfig(
         name="sweep-1",
