@@ -54,6 +54,25 @@ that an agent (or a human) can drive.
 
 ## Setup
 
+On the Linux deploy box the quickest path is the lifecycle script, which
+creates the venv, installs the package, seeds `.env`, and runs the server as
+a backgrounded process tracked by a PID file:
+
+```bash
+./.scripts/next.sh install      # .venv + pip install -e ".[training,dev]" + seed .env
+docker compose up -d            # MLflow tracking server → http://localhost:5000
+# edit .env: TRAINPIPE_API_KEY, optionally TRAINPIPE_VISIBLE_GPUS
+./.scripts/next.sh start        # uvicorn on :8080, health-checked
+./.scripts/next.sh status       # PID + HTTP health probe
+./.scripts/next.sh logs -f      # follow the server log
+./.scripts/next.sh stop         # stop (restart = stop + start)
+```
+
+GPU training also needs a CUDA torch build: `./.scripts/install-torch-cu128.sh`.
+
+<details>
+<summary>Manual setup (equivalent steps)</summary>
+
 ```bash
 # 1. Python deps
 python -m venv .venv
@@ -71,6 +90,7 @@ cp .env.example .env
 # 4. Run
 trainpipe                           # uvicorn on :8080
 ```
+</details>
 
 Health check: `curl http://localhost:8080/health`.
 

@@ -133,6 +133,9 @@ celerybeat.pid
 env/
 venv/
 ENV/
+
+# next.sh runtime state (PID + server log)
+.run/
 env.bak/
 venv.bak/
 
