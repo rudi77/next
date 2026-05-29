@@ -7,6 +7,7 @@ from ..core.db import Database
 from ..scheduler.gpu_pool import GpuPool, detect_gpus
 from ..scheduler.loop import Scheduler
 from ..settings import settings
+from .routes import experiments, gpus, studies
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,8 +24,8 @@ async def lifespan(app: FastAPI):
     db = Database(settings.sqlite_path)
     await db.init()
 
-    gpus = detect_gpus(settings.visible_gpus)
-    gpu_pool = GpuPool(gpus)
+    detected = detect_gpus(settings.visible_gpus)
+    gpu_pool = GpuPool(detected)
 
     scheduler = Scheduler(db, gpu_pool)
     await scheduler.start()
@@ -45,3 +46,8 @@ app = FastAPI(title="trainpipe", version="0.1.0", lifespan=lifespan)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+app.include_router(experiments.router)
+app.include_router(gpus.router)
+app.include_router(studies.router)
