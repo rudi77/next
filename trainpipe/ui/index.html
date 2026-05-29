@@ -190,6 +190,63 @@
           </tbody>
         </table>
       </div>
+
+      <!-- Cost vs Best-Metric scatter -->
+      <div class="bg-white rounded-lg shadow p-4 mt-6" x-show="studyCostPoints.length > 0">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-semibold text-sm">Cost vs Best-Metric</h3>
+          <span class="text-xs text-slate-500">
+            X = total GPU-hours · Y = best metric · circle size = trials
+          </span>
+        </div>
+        <svg :width="costPlot.w" :height="costPlot.h" class="block max-w-full">
+          <!-- axes -->
+          <line :x1="costPlot.pad" :y1="costPlot.pad" :x2="costPlot.pad" :y2="costPlot.h - costPlot.pad"
+                stroke="#cbd5e1" stroke-width="1"></line>
+          <line :x1="costPlot.pad" :y1="costPlot.h - costPlot.pad" :x2="costPlot.w - costPlot.pad" :y2="costPlot.h - costPlot.pad"
+                stroke="#cbd5e1" stroke-width="1"></line>
+          <!-- X-axis label -->
+          <text :x="costPlot.w / 2" :y="costPlot.h - 6" text-anchor="middle"
+                font-size="11" fill="#64748b">GPU-hours</text>
+          <!-- Y-axis label -->
+          <text :x="14" :y="costPlot.h / 2" text-anchor="middle"
+                :transform="'rotate(-90 14 ' + (costPlot.h / 2) + ')'"
+                font-size="11" fill="#64748b" x-text="costPlot.yLabel"></text>
+          <!-- ticks -->
+          <template x-for="(t, idx) in costPlot.xTicks" :key="'xt' + idx">
+            <g>
+              <line :x1="t.px" :y1="costPlot.h - costPlot.pad"
+                    :x2="t.px" :y2="costPlot.h - costPlot.pad + 4"
+                    stroke="#cbd5e1"></line>
+              <text :x="t.px" :y="costPlot.h - costPlot.pad + 16"
+                    text-anchor="middle" font-size="10" fill="#94a3b8"
+                    x-text="t.label"></text>
+            </g>
+          </template>
+          <template x-for="(t, idx) in costPlot.yTicks" :key="'yt' + idx">
+            <g>
+              <line :x1="costPlot.pad - 4" :y1="t.py"
+                    :x2="costPlot.pad" :y2="t.py"
+                    stroke="#cbd5e1"></line>
+              <text :x="costPlot.pad - 6" :y="t.py + 4"
+                    text-anchor="end" font-size="10" fill="#94a3b8"
+                    x-text="t.label"></text>
+            </g>
+          </template>
+          <!-- points -->
+          <template x-for="pt in costPlot.points" :key="pt.study_id">
+            <g>
+              <circle :cx="pt.cx" :cy="pt.cy" :r="pt.r"
+                      fill="rgba(8,145,178,0.55)" stroke="#0e7490" stroke-width="1">
+                <title x-text="pt.tooltip"></title>
+              </circle>
+              <text :x="pt.cx" :y="pt.cy - pt.r - 4"
+                    text-anchor="middle" font-size="10" fill="#0f172a"
+                    x-text="pt.label"></text>
+            </g>
+          </template>
+        </svg>
+      </div>
     </section>
 
     <!-- ── Datasets tab ────────────────────────────────────────────── -->
@@ -494,6 +551,8 @@
                 <td class="px-3 py-2 text-xs hidden lg:table-cell" x-text="modelBestEval(m)"></td>
                 <td class="px-3 py-2 text-slate-500 text-xs hidden lg:table-cell" x-text="fmtTime(m.created_at)"></td>
                 <td class="px-3 py-2 text-right whitespace-nowrap">
+                  <button @click="openTrainedOn(m)" class="text-slate-700 hover:underline text-xs mr-2"
+                          title="Datasets used to train this model">Datasets</button>
                   <button @click="openSetAlias(m)" class="text-cyan-700 hover:underline text-xs mr-2">Alias</button>
                   <button @click="openQuantize(m)" class="text-amber-700 hover:underline text-xs mr-2"
                           title="Create a quantized version">Quantize</button>
@@ -554,7 +613,9 @@
                   </template>
                 </td>
                 <td class="px-3 py-2 text-slate-500 text-xs hidden md:table-cell" x-text="fmtTime(p.created_at)"></td>
-                <td class="px-3 py-2 text-right">
+                <td class="px-3 py-2 text-right whitespace-nowrap">
+                  <button @click="openPipelineDag(p)"
+                          class="text-cyan-700 hover:underline text-xs mr-2">Graph</button>
                   <button x-show="p.status === 'queued' || p.status === 'running'"
                           @click="cancelPipeline(p.id)"
                           class="text-rose-600 hover:underline text-xs">Cancel</button>
@@ -581,6 +642,76 @@
         most informative samples for human review. Submit via
         <code class="text-xs bg-slate-100 px-1 rounded">POST /active-learning/runs</code>.
       </p>
+
+      <!-- Iteration dashboard: eval score progression across model
+           versions under a family. Each version = one AL→annotate→retrain
+           iteration once the loop is closed. -->
+      <div class="bg-white rounded-lg shadow p-4 mb-4" x-show="iterationFamilies.length > 0">
+        <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+          <h3 class="font-semibold text-sm">Iteration dashboard</h3>
+          <div class="flex items-center gap-2 text-xs">
+            <label class="text-slate-500">family</label>
+            <select x-model="alFamily" @change="alMetric = iterationDefaultMetric(alFamily)"
+                    class="border rounded px-2 py-1">
+              <template x-for="f in iterationFamilies" :key="f">
+                <option :value="f" x-text="f"></option>
+              </template>
+            </select>
+            <label class="text-slate-500 ml-2">metric</label>
+            <select x-model="alMetric" class="border rounded px-2 py-1">
+              <template x-for="m in iterationMetricsForFamily(alFamily)" :key="m">
+                <option :value="m" x-text="m"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+        <svg :width="iterationChart.w" :height="iterationChart.h" class="block max-w-full"
+             x-show="iterationChart.points.length > 0">
+          <line :x1="iterationChart.pad" :y1="iterationChart.pad"
+                :x2="iterationChart.pad" :y2="iterationChart.h - iterationChart.pad"
+                stroke="#cbd5e1"></line>
+          <line :x1="iterationChart.pad" :y1="iterationChart.h - iterationChart.pad"
+                :x2="iterationChart.w - iterationChart.pad" :y2="iterationChart.h - iterationChart.pad"
+                stroke="#cbd5e1"></line>
+          <text :x="iterationChart.w / 2" :y="iterationChart.h - 6" text-anchor="middle"
+                font-size="11" fill="#64748b">version (iteration)</text>
+          <text :x="14" :y="iterationChart.h / 2" text-anchor="middle"
+                :transform="'rotate(-90 14 ' + (iterationChart.h / 2) + ')'"
+                font-size="11" fill="#64748b" x-text="alMetric"></text>
+          <template x-for="(t, idx) in iterationChart.xTicks" :key="'ix'+idx">
+            <g>
+              <line :x1="t.px" :y1="iterationChart.h - iterationChart.pad"
+                    :x2="t.px" :y2="iterationChart.h - iterationChart.pad + 4" stroke="#cbd5e1"></line>
+              <text :x="t.px" :y="iterationChart.h - iterationChart.pad + 16"
+                    text-anchor="middle" font-size="10" fill="#94a3b8" x-text="t.label"></text>
+            </g>
+          </template>
+          <template x-for="(t, idx) in iterationChart.yTicks" :key="'iy'+idx">
+            <g>
+              <line :x1="iterationChart.pad - 4" :y1="t.py"
+                    :x2="iterationChart.pad" :y2="t.py" stroke="#cbd5e1"></line>
+              <text :x="iterationChart.pad - 6" :y="t.py + 4"
+                    text-anchor="end" font-size="10" fill="#94a3b8" x-text="t.label"></text>
+            </g>
+          </template>
+          <polyline :points="iterationChart.polyline"
+                    fill="none" stroke="#0891b2" stroke-width="2"></polyline>
+          <template x-for="p in iterationChart.points" :key="'ip'+p.version">
+            <g>
+              <circle :cx="p.cx" :cy="p.cy" r="5" fill="#0891b2"
+                      stroke="white" stroke-width="2">
+                <title x-text="p.tooltip"></title>
+              </circle>
+              <text :x="p.cx" :y="p.cy - 10" text-anchor="middle"
+                    font-size="10" fill="#0f172a" x-text="'v' + p.version"></text>
+            </g>
+          </template>
+        </svg>
+        <div x-show="iterationChart.points.length === 0" class="text-sm text-slate-400 py-6 text-center">
+          No versions of <span class="font-mono" x-text="alFamily"></span> have an eval score for
+          <span class="font-mono" x-text="alMetric"></span>. Run an eval against a registered model.
+        </div>
+      </div>
       <div class="bg-white rounded-lg shadow overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 text-slate-600 text-left">
@@ -959,6 +1090,123 @@
           <span x-show="!submitting">Quantize</span>
           <span x-show="submitting">Running…</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Pipeline DAG modal ──────────────────────────────────────── -->
+  <div x-show="pipelineDagOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="pipelineDagOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[95vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center">
+        <div>
+          <h3 class="font-semibold" x-text="pipelineDagModel?.name || 'Pipeline'"></h3>
+          <p class="text-xs text-slate-500 font-mono" x-text="pipelineDagModel?.id"></p>
+        </div>
+        <button @click="pipelineDagOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="overflow-auto flex-1 p-4 sm:p-5 bg-slate-50">
+        <template x-if="pipelineDagModel">
+          <div>
+            <svg :width="dagLayout.w" :height="dagLayout.h" class="block">
+              <!-- arrow head marker -->
+              <defs>
+                <marker id="dag-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#64748b"></path>
+                </marker>
+              </defs>
+              <!-- edges first so nodes draw over them -->
+              <template x-for="e in dagLayout.edges" :key="e.from + '→' + e.to">
+                <path :d="e.path" stroke="#94a3b8" stroke-width="1.5" fill="none"
+                      marker-end="url(#dag-arrow)"></path>
+              </template>
+              <!-- nodes -->
+              <template x-for="n in dagLayout.nodes" :key="n.name">
+                <g :transform="'translate(' + n.x + ',' + n.y + ')'">
+                  <rect :width="n.w" :height="n.h" rx="8"
+                        :fill="dagNodeFill(n.status)"
+                        stroke="#cbd5e1" stroke-width="1"></rect>
+                  <text :x="n.w / 2" :y="22"
+                        text-anchor="middle"
+                        class="font-medium"
+                        font-size="13" fill="#0f172a"
+                        x-text="n.name"></text>
+                  <text :x="n.w / 2" :y="42"
+                        text-anchor="middle"
+                        font-size="11" :fill="dagNodeTextColor(n.status)"
+                        x-text="n.status"></text>
+                </g>
+              </template>
+            </svg>
+            <div class="text-xs text-slate-500 mt-3">
+              Edges show <code class="bg-slate-100 px-1 rounded">depends_on</code>.
+              Click "Cancel" on the pipeline row to stop it.
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Trained-on datasets modal ──────────────────────────────── -->
+  <div x-show="trainedOnOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="trainedOnOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[95vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center">
+        <div>
+          <h3 class="font-semibold">Trained on</h3>
+          <p class="text-xs text-slate-500" x-text="trainedOnLabel"></p>
+        </div>
+        <button @click="trainedOnOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="overflow-auto flex-1 p-4 sm:p-5">
+        <table class="w-full text-sm" x-show="trainedOnDatasets.length > 0">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Ref</th>
+              <th class="px-3 py-2 hidden sm:table-cell">Version</th>
+              <th class="px-3 py-2 hidden md:table-cell">Rows</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="d in trainedOnDatasets" :key="d.id">
+              <tr class="border-t">
+                <td class="px-3 py-2 font-medium">
+                  <div class="flex items-center gap-2">
+                    <span x-text="d.name"></span>
+                    <template x-for="k in (d.media_kinds || [])" :key="k">
+                      <span class="inline-block bg-purple-100 text-purple-800 rounded px-1.5 py-0.5 text-xs"
+                            x-text="k === 'images' ? '🖼️' : k === 'videos' ? '🎬' : k"></span>
+                    </template>
+                  </div>
+                </td>
+                <td class="px-3 py-2">
+                  <code class="bg-slate-100 px-1.5 py-1 rounded text-xs cursor-pointer inline-block"
+                        @click="copy('ds:' + d.id)"
+                        :title="'Click to copy ds:' + d.id">
+                    ds:<span x-text="d.id.slice(0,8)"></span>…
+                  </code>
+                </td>
+                <td class="px-3 py-2 font-mono text-xs hidden sm:table-cell">v<span x-text="d.version"></span></td>
+                <td class="px-3 py-2 text-slate-600 hidden md:table-cell" x-text="d.line_count ?? '—'"></td>
+                <td class="px-3 py-2 text-right">
+                  <button @click="tab='datasets'; trainedOnOpen=false"
+                          class="text-cyan-700 hover:underline text-xs">View</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div x-show="trainedOnDatasets.length === 0 && !trainedOnLoading"
+             class="text-sm text-slate-500 py-8 text-center">
+          No registered datasets recorded. The experiment may have used
+          HF-id refs that aren't in the dataset registry, or lineage
+          wasn't captured at register-time.
+        </div>
+        <div x-show="trainedOnLoading" class="text-sm text-slate-400 py-8 text-center">Loading…</div>
       </div>
     </div>
   </div>
@@ -1415,13 +1663,26 @@ function trainpipe() {
     quantizeDraft: { model_id: '', name: '', method: 'awq', bits: 4 },
     quantizeError: '',
 
+    // Trained-on (Phase 15 follow-up) state.
+    trainedOnOpen: false,
+    trainedOnLabel: '',
+    trainedOnDatasets: [],
+    trainedOnLoading: false,
+
+    // Pipeline DAG modal state.
+    pipelineDagOpen: false,
+    pipelineDagModel: null,
+
     // New tabs (pipelines / active-learning / watches) data + queue modal.
     pipelines: [],
     alRuns: [],
     watches: [],
+    studyCostPoints: [],
     alQueueOpen: false,
     alQueueRunId: '',
     alQueueItems: [],
+    alFamily: '',
+    alMetric: '',
 
     playground: {
       refA: 'base:Qwen/Qwen2.5-0.5B-Instruct',
@@ -1518,8 +1779,20 @@ function trainpipe() {
         this.api('/pipelines').then(r => this.pipelines = r).catch(() => {}),
         this.api('/active-learning/runs?limit=100').then(r => this.alRuns = r).catch(() => {}),
         this.api('/watches').then(r => this.watches = r).catch(() => {}),
+        this.api('/studies/cost-summary').then(r => this.studyCostPoints = r).catch(() => {}),
       ];
       await Promise.all(tasks);
+      // Auto-pick the first family + metric on first load so the
+      // iteration dashboard isn't empty until the user fiddles.
+      if (!this.alFamily) {
+        const fams = this.iterationFamilies;
+        if (fams.length > 0) {
+          this.alFamily = fams[0];
+          this.alMetric = this.iterationDefaultMetric(this.alFamily);
+        }
+      } else if (!this.alMetric) {
+        this.alMetric = this.iterationDefaultMetric(this.alFamily);
+      }
     },
 
     // ── experiments ────────────────────────────────────────────
@@ -1898,6 +2171,21 @@ function trainpipe() {
       return flat.slice(0, 3).join('  ') || '—';
     },
 
+    // ── trained-on ────────────────────────────────────────────
+    async openTrainedOn(model) {
+      this.trainedOnOpen = true;
+      this.trainedOnLabel = model.name + ' v' + model.version;
+      this.trainedOnDatasets = [];
+      this.trainedOnLoading = true;
+      try {
+        this.trainedOnDatasets = await this.api(`/models/${model.id}/datasets`);
+      } catch (e) {
+        this.flash('Failed to load datasets: ' + e.message);
+      } finally {
+        this.trainedOnLoading = false;
+      }
+    },
+
     // ── quantize ──────────────────────────────────────────────
     openQuantize(model) {
       this.quantizeError = '';
@@ -1932,6 +2220,158 @@ function trainpipe() {
     },
 
     // ── pipelines ─────────────────────────────────────────────
+    openPipelineDag(pipeline) {
+      this.pipelineDagModel = pipeline;
+      this.pipelineDagOpen = true;
+    },
+    dagNodeFill(status) {
+      return {
+        pending:   '#f1f5f9',
+        queued:    '#fef3c7',
+        running:   '#cffafe',
+        completed: '#d1fae5',
+        failed:    '#fee2e2',
+        cancelled: '#e2e8f0',
+        skipped:   '#f1f5f9',
+      }[status] || '#f1f5f9';
+    },
+    dagNodeTextColor(status) {
+      return {
+        pending:   '#64748b',
+        queued:    '#92400e',
+        running:   '#155e75',
+        completed: '#065f46',
+        failed:    '#b91c1c',
+        cancelled: '#475569',
+        skipped:   '#94a3b8',
+      }[status] || '#64748b';
+    },
+    get dagLayout() {
+      // Topological layered layout: each node's depth is
+      // max(deps' depth) + 1. Nodes within a depth are arranged
+      // vertically in their stage_index order.
+      const p = this.pipelineDagModel;
+      if (!p || !p.stages) return { w: 200, h: 100, nodes: [], edges: [] };
+      const byName = {};
+      for (const s of p.stages) byName[s.stage_name] = s;
+      const depths = {};
+      const computeDepth = (name, stack) => {
+        if (name in depths) return depths[name];
+        if (stack.has(name)) return 0; // cycle safety — shouldn't happen post-validation
+        stack.add(name);
+        const stg = byName[name];
+        const deps = (stg && stg.depends_on) || [];
+        const d = deps.length === 0 ? 0 : 1 + Math.max(...deps.map(d => computeDepth(d, stack)));
+        depths[name] = d;
+        stack.delete(name);
+        return d;
+      };
+      for (const s of p.stages) computeDepth(s.stage_name, new Set());
+      // Group by depth
+      const byDepth = {};
+      for (const s of p.stages) {
+        (byDepth[depths[s.stage_name]] ||= []).push(s);
+      }
+      // Sort each depth's nodes by stage_index for stable layout
+      const depthKeys = Object.keys(byDepth).map(Number).sort((a, b) => a - b);
+      for (const d of depthKeys) {
+        byDepth[d].sort((a, b) => a.stage_index - b.stage_index);
+      }
+      const nodeW = 140, nodeH = 56, gapX = 60, gapY = 24, padX = 24, padY = 24;
+      const nodes = [];
+      const posByName = {};
+      let maxRows = 0;
+      for (const d of depthKeys) {
+        maxRows = Math.max(maxRows, byDepth[d].length);
+        byDepth[d].forEach((s, i) => {
+          const x = padX + d * (nodeW + gapX);
+          const y = padY + i * (nodeH + gapY);
+          posByName[s.stage_name] = { x, y, w: nodeW, h: nodeH };
+          nodes.push({
+            name: s.stage_name,
+            status: s.status,
+            x, y, w: nodeW, h: nodeH,
+          });
+        });
+      }
+      const w = padX + depthKeys.length * (nodeW + gapX) - gapX + padX;
+      const h = padY + maxRows * (nodeH + gapY) - gapY + padY;
+      const edges = [];
+      for (const s of p.stages) {
+        for (const dep of s.depends_on || []) {
+          const a = posByName[dep], b = posByName[s.stage_name];
+          if (!a || !b) continue;
+          // Edge from right edge of dep to left edge of child, simple
+          // S-curve via two control points so it looks less like a slash.
+          const x1 = a.x + a.w, y1 = a.y + a.h / 2;
+          const x2 = b.x, y2 = b.y + b.h / 2;
+          const mx = (x1 + x2) / 2;
+          edges.push({
+            from: dep,
+            to: s.stage_name,
+            path: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`,
+          });
+        }
+      }
+      return { w, h, nodes, edges };
+    },
+    get costPlot() {
+      // Build a scatter plot for /studies/cost-summary points.
+      // Filter out studies with no usable best_value or zero cost so a
+      // single misconfigured row doesn't flatten the plot to the origin.
+      const pts = (this.studyCostPoints || []).filter(p =>
+        p.best_value !== null && p.best_value !== undefined &&
+        p.total_gpu_seconds > 0
+      );
+      const w = 720, h = 320, pad = 50;
+      if (pts.length === 0) {
+        return { w, h, pad, points: [], xTicks: [], yTicks: [], yLabel: '' };
+      }
+      const xs = pts.map(p => p.total_gpu_seconds / 3600);
+      const ys = pts.map(p => p.best_value);
+      let xMin = Math.min(...xs), xMax = Math.max(...xs);
+      let yMin = Math.min(...ys), yMax = Math.max(...ys);
+      // Pad ranges by 5% so points don't sit on the axes.
+      const padPct = 0.05;
+      const xPad = (xMax - xMin) * padPct || (xMax || 1) * padPct;
+      const yPad = (yMax - yMin) * padPct || (Math.abs(yMax) || 1) * padPct;
+      xMin = Math.max(0, xMin - xPad);
+      xMax = xMax + xPad;
+      yMin = yMin - yPad;
+      yMax = yMax + yPad;
+      const xRange = (xMax - xMin) || 1;
+      const yRange = (yMax - yMin) || 1;
+      const trialMax = Math.max(...pts.map(p => p.n_trials || 1), 1);
+      const direction = pts[0].direction; // assume consistent across studies
+      const points = pts.map(p => {
+        const gpuHrs = p.total_gpu_seconds / 3600;
+        const cx = pad + ((gpuHrs - xMin) / xRange) * (w - 2 * pad);
+        const cy = h - pad - ((p.best_value - yMin) / yRange) * (h - 2 * pad);
+        const r = 4 + 8 * Math.sqrt((p.n_trials || 1) / trialMax);
+        const trim = s => s && s.length > 18 ? s.slice(0, 17) + '…' : s;
+        return {
+          study_id: p.study_id,
+          cx, cy, r,
+          label: trim(p.name),
+          tooltip: `${p.name}\nbest ${p.target_metric} = ${p.best_value.toFixed(4)}\n` +
+                   `${p.n_trials} trials · ${gpuHrs.toFixed(2)} GPU-hrs`,
+        };
+      });
+      const niceTick = (min, max, n) => {
+        const step = (max - min) / n;
+        return Array.from({ length: n + 1 }, (_, i) => min + i * step);
+      };
+      const xTicks = niceTick(xMin, xMax, 4).map(v => ({
+        px: pad + ((v - xMin) / xRange) * (w - 2 * pad),
+        label: v.toFixed(v > 10 ? 0 : 1),
+      }));
+      const yTicks = niceTick(yMin, yMax, 4).map(v => ({
+        py: h - pad - ((v - yMin) / yRange) * (h - 2 * pad),
+        label: v.toFixed(Math.abs(v) > 10 ? 0 : 3),
+      }));
+      const yLabel = `best ${pts[0].target_metric} (${direction})`;
+      return { w, h, pad, points, xTicks, yTicks, yLabel };
+    },
     stageColor(status) {
       return {
         pending:   'bg-slate-100 text-slate-600',
@@ -1972,6 +2412,84 @@ function trainpipe() {
         this.flash('Deleted');
         this.refreshAll();
       } catch (e) { this.flash('Delete failed: ' + e.message); }
+    },
+
+    // ── active learning iteration dashboard ──────────────────
+    get iterationFamilies() {
+      // Families that have at least one model with an eval_summary.
+      const fams = new Set();
+      for (const m of (this.models || [])) {
+        if (m.eval_summary && Object.keys(m.eval_summary).length > 0) {
+          fams.add(m.name);
+        }
+      }
+      return Array.from(fams).sort();
+    },
+    iterationMetricsForFamily(family) {
+      // Flatten {suite_id: {metric: mean}} across all versions of the
+      // family into a deduped list of "suite/metric" keys.
+      const out = new Set();
+      for (const m of (this.models || [])) {
+        if (m.name !== family || !m.eval_summary) continue;
+        for (const [suite, metrics] of Object.entries(m.eval_summary)) {
+          for (const metric of Object.keys(metrics || {})) {
+            out.add(`${suite}/${metric}`);
+          }
+        }
+      }
+      return Array.from(out).sort();
+    },
+    iterationDefaultMetric(family) {
+      const ms = this.iterationMetricsForFamily(family);
+      return ms[0] || '';
+    },
+    get iterationChart() {
+      const w = 720, h = 280, pad = 50;
+      const empty = { w, h, pad, points: [], polyline: '', xTicks: [], yTicks: [] };
+      if (!this.alFamily || !this.alMetric) return empty;
+      const sep = this.alMetric.indexOf('/');
+      if (sep < 0) return empty;
+      const suite = this.alMetric.slice(0, sep);
+      const metric = this.alMetric.slice(sep + 1);
+      // Collect (version, value) for the chosen family + metric.
+      const rows = [];
+      for (const m of (this.models || [])) {
+        if (m.name !== this.alFamily) continue;
+        const v = m.eval_summary?.[suite]?.[metric];
+        if (v === undefined || v === null) continue;
+        rows.push({ version: m.version, value: Number(v) });
+      }
+      if (rows.length === 0) return empty;
+      rows.sort((a, b) => a.version - b.version);
+      const xs = rows.map(r => r.version);
+      const ys = rows.map(r => r.value);
+      let xMin = Math.min(...xs), xMax = Math.max(...xs);
+      let yMin = Math.min(...ys), yMax = Math.max(...ys);
+      // Pad axes a bit so points don't overlap the frame.
+      const yPad = (yMax - yMin) * 0.1 || (Math.abs(yMax) || 1) * 0.1;
+      yMin -= yPad; yMax += yPad;
+      if (xMin === xMax) { xMin -= 1; xMax += 1; }
+      const xRange = xMax - xMin || 1, yRange = yMax - yMin || 1;
+      const points = rows.map(r => {
+        const cx = pad + ((r.version - xMin) / xRange) * (w - 2 * pad);
+        const cy = h - pad - ((r.value - yMin) / yRange) * (h - 2 * pad);
+        return {
+          version: r.version, value: r.value, cx, cy,
+          tooltip: `v${r.version}: ${r.value.toFixed(4)}`,
+        };
+      });
+      const polyline = points.map(p => `${p.cx},${p.cy}`).join(' ');
+      const niceTick = (min, max, n) =>
+        Array.from({ length: n + 1 }, (_, i) => min + i * (max - min) / n);
+      const xTicks = niceTick(xMin, xMax, Math.min(4, rows.length)).map(v => ({
+        px: pad + ((v - xMin) / xRange) * (w - 2 * pad),
+        label: Math.round(v).toString(),
+      }));
+      const yTicks = niceTick(yMin, yMax, 4).map(v => ({
+        py: h - pad - ((v - yMin) / yRange) * (h - 2 * pad),
+        label: v.toFixed(Math.abs(v) > 10 ? 0 : 3),
+      }));
+      return { w, h, pad, points, polyline, xTicks, yTicks };
     },
 
     // ── active learning ──────────────────────────────────────

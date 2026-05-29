@@ -70,3 +70,61 @@ async def test_gpu_seconds_math_helper(db):
     wall = (finished - started).total_seconds()
     gpu_sec = wall * len(gpu_ids)
     assert gpu_sec == 7200.0
+
+
+async def test_study_cost_summary_aggregates(db):
+    """Sum of all completed experiments under a study, not the others."""
+    from trainpipe.api.schemas import StudyConfig
+
+    async with db.connect() as conn:
+        cfg = StudyConfig(
+            name="study1",
+            base_spec=ExperimentSpec(model="m", dataset=["/x"]),
+            search_space={},
+            target_metric="loss",
+            direction="minimize",
+        )
+        study_id = await repository.create_study(conn, cfg, "sqlite:///x")
+
+        # Three completed runs, one running (excluded), one failed (excluded).
+        for gpu_s, status, peak in [
+            (100.0, "completed", 5000.0),
+            (200.0, "completed", 8000.0),
+            (300.0, "completed", 6000.0),
+            (50.0, "running", 4000.0),
+            (75.0, "failed", 3000.0),
+        ]:
+            spec = ExperimentSpec(model="m", dataset=["/x"])
+            exp_id = await repository.create_experiment(
+                conn, spec, study_id=study_id
+            )
+            await conn.execute(
+                "UPDATE experiments SET status=?, gpu_seconds=?, "
+                "peak_vram_mb=? WHERE id=?",
+                (status, gpu_s, peak, exp_id),
+            )
+            await conn.commit()
+
+        summary = await repository.study_cost_summary(conn, study_id)
+    assert summary["n_trials"] == 3
+    assert summary["total_gpu_seconds"] == 600.0
+    assert summary["peak_vram_mb"] == 8000.0  # max across completed runs
+
+
+async def test_study_cost_summary_empty_study(db):
+    """A study with no experiments returns zero counts, not a crash."""
+    from trainpipe.api.schemas import StudyConfig
+
+    async with db.connect() as conn:
+        cfg = StudyConfig(
+            name="empty",
+            base_spec=ExperimentSpec(model="m", dataset=["/x"]),
+            search_space={},
+            target_metric="loss",
+            direction="minimize",
+        )
+        study_id = await repository.create_study(conn, cfg, "sqlite:///x")
+        summary = await repository.study_cost_summary(conn, study_id)
+    assert summary["n_trials"] == 0
+    assert summary["total_gpu_seconds"] == 0.0
+    assert summary["peak_vram_mb"] is None

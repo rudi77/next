@@ -84,6 +84,44 @@ def _row_to_experiment_record(row: aiosqlite.Row) -> ExperimentRecord:
     )
 
 
+async def study_cost_summary(
+    conn: aiosqlite.Connection, study_id: str
+) -> dict[str, Any]:
+    """Aggregate GPU/VRAM/energy for one study's experiments.
+
+    Returns sums + counts so the UI's "Cost vs Best-Metric" plot can
+    render a single point per study without round-tripping every trial.
+    Only ``completed`` experiments contribute — in-progress ones don't
+    have a final ``gpu_seconds`` and a failed run's partial cost is
+    excluded by design (don't penalize learnings).
+    """
+    cur = await conn.execute(
+        "SELECT "
+        "COUNT(*) AS n_trials, "
+        "COALESCE(SUM(gpu_seconds), 0.0) AS total_gpu_seconds, "
+        "MAX(peak_vram_mb) AS peak_vram_mb, "
+        "COALESCE(SUM(energy_wh), 0.0) AS total_energy_wh "
+        "FROM experiments WHERE study_id = ? AND status = 'completed'",
+        (study_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return {
+            "n_trials": 0,
+            "total_gpu_seconds": 0.0,
+            "peak_vram_mb": None,
+            "total_energy_wh": 0.0,
+        }
+    return {
+        "n_trials": int(row["n_trials"] or 0),
+        "total_gpu_seconds": float(row["total_gpu_seconds"] or 0.0),
+        "peak_vram_mb": (
+            float(row["peak_vram_mb"]) if row["peak_vram_mb"] is not None else None
+        ),
+        "total_energy_wh": float(row["total_energy_wh"] or 0.0),
+    }
+
+
 async def set_experiment_resource_usage(
     conn: aiosqlite.Connection,
     experiment_id: str,

@@ -384,6 +384,48 @@ def inference_compare(
     )
 
 
+# ---------------------------------------------------------------------------
+# Compliance (Phase 15 follow-up)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def forget_scan(
+    term: str,
+    regex: bool = False,
+    case_sensitive: bool = False,
+) -> dict:
+    """Scan registered datasets for ``term`` and return impacted models.
+
+    Direct local scan — does NOT redact anything. Use the report to
+    decide which datasets to POST /datasets/{id}/redact and which
+    models to retrain. ``term`` is a substring by default; pass
+    ``regex=True`` to switch to ``re.search``. Returns a JSON report
+    with ``hits``, ``impacted_models``, and ``skipped_datasets``.
+
+    Reads the SQLite at ``settings.sqlite_path`` directly so the MCP
+    client doesn't need to round-trip the REST API for a long scan.
+    """
+    import asyncio
+
+    from .compliance.forget import scan_datasets_for_term
+    from .core.db import Database
+    from .settings import settings
+
+    async def _do():
+        db = Database(settings.sqlite_path)
+        async with db.connect() as conn:
+            report = await scan_datasets_for_term(
+                conn,
+                term,
+                is_regex=regex,
+                case_sensitive=case_sensitive,
+            )
+        return report.to_dict()
+
+    return asyncio.run(_do())
+
+
 def main() -> None:
     """Entrypoint for ``python -m trainpipe.mcp`` and the trainpipe-mcp script."""
     mcp.run()

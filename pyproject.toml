@@ -31,6 +31,7 @@ dev = [
 [project.scripts]
 trainpipe = "trainpipe.cli:main"
 trainpipe-mcp = "trainpipe.mcp:main"
+trainpipe-forget = "trainpipe.compliance.cli:main"
 
 [build-system]
 requires = ["hatchling"]

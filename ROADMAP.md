@@ -587,12 +587,27 @@ identifiziert. Status (2026-05-29 Abend, Follow-up-Pass):
   peak, sichtbar ab xl-Breakpoint)
 - [x] Quantize button im Models-Tabelle (Modal mit method+bits)
 
-### Offene Items für später
-- [ ] Studies "Cost vs Best-Metric" Plot
-- [ ] Pipelines: SVG-DAG-Visualisierung
-- [ ] Active Learning: Iteration-Dashboard
-- [ ] Models: "Trained on" Liste im Model-Detail mit Dataset-Versions
-- [ ] Compliance-Skript "Forget user Y"
+### Geschlossen (2026-05-29 zweiter Follow-up-Pass)
+- [x] **Studies "Cost vs Best-Metric" Plot** — neuer `GET /studies/
+  cost-summary` Endpoint (aggregiert gpu_seconds + best_value pro
+  Study) und SVG-Scatter in der Studies-Tab UI (X=GPU-hours,
+  Y=best metric, Kreisgröße=trial count).
+- [x] **Pipelines SVG-DAG** — "Graph"-Action pro Pipeline-Row öffnet
+  Modal mit topologischer Layered-Layout-Visualisierung, S-Kurven-
+  Kanten für depends_on, Knoten farbig nach Stage-Status.
+- [x] **AL Iteration-Dashboard** — Family/Metric Selektoren plus
+  SVG-Linienchart der Eval-Score-Progression über Model-Versionen;
+  greift auf das bestehende eval_summary auf den Models zu.
+- [x] **Models "Trained on" Liste** — neuer
+  `GET /models/{model_id}/datasets` Endpoint plus "Datasets" Button
+  im Models-Tab → Modal mit Ref + Version + Rows.
+- [x] **Compliance "Forget user Y" Skript** — `trainpipe-forget`
+  CLI + `forget_scan` MCP Tool. Scannt alle registrierten JSONL
+  Datasets nach einem Substring/Regex und liefert (a) Liste der
+  betroffenen Datasets mit Hit-Counts + Sample-Zeilen, (b) Liste
+  der betroffenen Models via recursive lineage. Berichtet nur —
+  redact-Action ist separat (POST /datasets/{id}/redact). Exit-Code
+  ≠ 0 wenn Hits gefunden, damit als CI-Gate nutzbar.
 
 ## Out of Scope (mit Begründung)
 

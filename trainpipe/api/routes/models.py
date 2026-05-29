@@ -180,6 +180,67 @@ async def list_models_by_name(
         return await repository.list_models_by_name(conn, name)
 
 
+class TrainedOnDataset(BaseModel):
+    """One dataset that a model was trained on."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    version: int
+    path: str
+    line_count: int | None = None
+    media_kinds: list[str] = Field(default_factory=list)
+
+
+@router.get("/{model_id}/datasets")
+async def list_trained_on_datasets(
+    model_id: str,
+    db: Annotated[Database, Depends(get_db)],
+) -> list[TrainedOnDataset]:
+    """All datasets recorded as training inputs for ``model_id``.
+
+    The lineage rows are populated at register-time by walking the
+    experiment's ``spec.dataset`` / ``val_dataset`` and matching paths
+    against the registered datasets — so this only includes registered
+    datasets the experiment actually used. HF-id refs (anything that
+    wasn't a registered upload) won't show up here.
+
+    Declared BEFORE ``/{name}/{alias_or_version}`` so FastAPI matches
+    the trailing literal ``/datasets`` segment first; otherwise a call
+    like ``GET /models/<hex>/datasets`` would resolve to the alias
+    lookup with ``alias_or_version = "datasets"``.
+    """
+    async with db.connect() as conn:
+        model = await repository.get_model(conn, model_id)
+        if model is None:
+            raise HTTPException(404, "model not found")
+        ds_ids = await repository.datasets_used_by_model(conn, model_id)
+        if not ds_ids:
+            return []
+        # Fetch each dataset row; the repo doesn't have a bulk-by-id
+        # helper today and the typical model has 1-5 datasets so the
+        # extra round-trips are fine.
+        out: list[TrainedOnDataset] = []
+        for ds_id in ds_ids:
+            rec = await repository.get_dataset(conn, ds_id)
+            if rec is None:
+                # CASCADE delete should have removed the lineage row;
+                # belt-and-suspenders so a corrupt row doesn't 500 us.
+                continue
+            out.append(
+                TrainedOnDataset(
+                    id=rec.id,
+                    name=rec.name,
+                    version=rec.version,
+                    path=rec.path,
+                    line_count=rec.line_count,
+                    media_kinds=rec.media_kinds,
+                )
+            )
+    return out
+
+
 @router.get("/{name}/{alias_or_version}")
 async def resolve_model(
     name: str,

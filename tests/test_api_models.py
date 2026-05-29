@@ -282,6 +282,74 @@ def test_remove_alias_endpoint(state, client):
     assert rm2.json()["status"] == "not_found"
 
 
+def test_trained_on_datasets(state, client):
+    """GET /models/{id}/datasets returns the registered datasets the
+    experiment was trained on. Path-only refs (HF ids etc.) are absent
+    because they weren't in the dataset registry."""
+    # Upload a dataset, then create + complete an experiment that uses it,
+    # then register the model.
+    files = {"file": ("ds.jsonl", b'{"x":1}\n', "application/x-ndjson")}
+    r = state["db"]  # noqa: F841 — for IDE only
+    import json as _json
+
+    async def _setup():
+        async with state["db"].connect() as conn:
+            ds_id = await repository.create_dataset(
+                conn,
+                name="train",
+                path="/tmp/train.jsonl",
+                fmt="jsonl",
+                size_bytes=10,
+                sha256="b" * 64,
+                line_count=1,
+            )
+            spec = ExperimentSpec(model="m", dataset=["/tmp/train.jsonl"])
+            exp_id = await repository.create_experiment(conn, spec)
+            await conn.execute(
+                "UPDATE experiments SET status='completed' WHERE id=?",
+                (exp_id,),
+            )
+            await conn.commit()
+            return ds_id, exp_id
+
+    ds_id, exp_id = _run(_setup())
+    reg = client.post(
+        "/models",
+        json={"name": "famX", "experiment_id": exp_id},
+        headers=HEADERS,
+    )
+    assert reg.status_code == 201
+    model_id = reg.json()["id"]
+
+    r = client.get(f"/models/{model_id}/datasets", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["id"] == ds_id
+    assert body[0]["name"] == "train"
+    assert body[0]["version"] == 1
+
+
+def test_trained_on_datasets_404_on_missing_model(state, client):
+    r = client.get("/models/no-such-id/datasets", headers=HEADERS)
+    assert r.status_code == 404
+
+
+def test_trained_on_route_does_not_shadow_alias_lookup(state, client):
+    """Sanity: the alias lookup must still work after we added
+    /models/{id}/datasets. Routes both have 2 segments; FastAPI matches
+    by declaration order."""
+    exp_id = _make_completed_experiment(state["db"])
+    client.post(
+        "/models",
+        json={"name": "famA", "experiment_id": exp_id, "alias": "production"},
+        headers=HEADERS,
+    )
+    by_alias = client.get("/models/famA/production", headers=HEADERS)
+    assert by_alias.status_code == 200
+    assert "production" in by_alias.json()["aliases"]
+
+
 def test_models_require_auth(state, client):
     r = client.get("/models")
     assert r.status_code == 401
