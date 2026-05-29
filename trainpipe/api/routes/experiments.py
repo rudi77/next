@@ -16,7 +16,7 @@ from ...training.dataset_refs import (
 from ..auth import require_api_key
 from ..deps import get_db, get_scheduler
 from ..schemas import ExperimentRecord, ExperimentSpec, ExperimentStatus
-from ..validation import enforce_dataset_paths_exist
+from ..validation import enforce_dataset_not_empty, enforce_dataset_paths_exist
 
 router = APIRouter(
     prefix="/experiments",
@@ -36,6 +36,7 @@ async def _resolve_and_validate(
     specs: list[ExperimentSpec], db: Database
 ) -> list[ExperimentSpec]:
     """Replace ``ds:<id>`` refs with real paths and validate the result."""
+    enforce_dataset_not_empty(specs)
     resolved: list[ExperimentSpec] = []
     async with db.connect() as conn:
         for spec in specs:

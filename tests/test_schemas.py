@@ -46,13 +46,12 @@ def test_experiment_spec_rejects_unknown_keys():
         raise AssertionError("expected ValidationError")
 
 
-def test_experiment_spec_rejects_empty_dataset():
-    """Empty dataset → swift sft would fail with 'Please input the training
-    dataset' after spawning. Cheaper to reject at validation."""
-    import pytest
-
-    with pytest.raises(Exception, match="(?i)dataset"):
-        ExperimentSpec.model_validate({"model": "m", "dataset": []})
+def test_experiment_spec_accepts_empty_dataset_at_schema_level():
+    """Empty list must deserialise so legacy DB rows still load; the empty
+    case is rejected at submit time by the route-level check (see
+    test_api.test_submit_empty_dataset_returns_422)."""
+    spec = ExperimentSpec.model_validate({"model": "m", "dataset": []})
+    assert spec.dataset == []
 
 
 def test_experiment_spec_rejects_missing_dataset():

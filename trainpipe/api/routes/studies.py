@@ -13,7 +13,7 @@ from ...training.dataset_refs import (
 from ..auth import require_api_key
 from ..deps import get_db, get_study_manager
 from ..schemas import StudyConfig, StudyRecord
-from ..validation import enforce_dataset_paths_exist
+from ..validation import enforce_dataset_not_empty, enforce_dataset_paths_exist
 
 router = APIRouter(
     prefix="/studies",
@@ -28,6 +28,7 @@ async def create_study(
     db: Annotated[Database, Depends(get_db)],
     manager: Annotated[StudyManager, Depends(get_study_manager)],
 ) -> dict[str, str]:
+    enforce_dataset_not_empty([config.base_spec])
     # Resolve ds:<id> refs in the base spec before kicking off trials.
     async with db.connect() as conn:
         try:

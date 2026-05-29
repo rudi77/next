@@ -63,7 +63,11 @@ class ExperimentSpec(BaseModel):
     model_type: str | None = None
     sft_type: SFTType = "lora"
 
-    dataset: list[str] = Field(..., min_length=1)
+    # NB: not enforcing min_length=1 here. Historical rows in the DB may
+    # have been written with an empty list (pre-validation), and re-reading
+    # them would 500 the list endpoints. Empty-dataset *submits* are blocked
+    # in the routes via api.validation.enforce_dataset_not_empty.
+    dataset: list[str]
     val_dataset: list[str] = Field(default_factory=list)
 
     gpu_count: int = Field(1, ge=1, le=8)

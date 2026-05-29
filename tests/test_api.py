@@ -245,6 +245,55 @@ def test_logs_returns_file_content(state, client, tmp_path):
     assert "training-line-2" in r.text
 
 
+def test_submit_empty_dataset_returns_422(state, client):
+    r = client.post(
+        "/experiments",
+        json={"model": "m", "dataset": []},
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["error"] == "empty_dataset"
+
+
+def test_batch_submit_empty_dataset_reports_index(state, client):
+    r = client.post(
+        "/experiments/batch",
+        json=[
+            {"model": "m", "dataset": ["AI-ModelScope/x"]},
+            {"model": "m", "dataset": []},
+        ],
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["spec_index"] == 1
+
+
+def test_legacy_empty_dataset_row_still_lists(state, client):
+    """Reading a row with dataset=[] (legacy / written pre-validation) must
+    not 500 the list endpoint."""
+    import json as _json
+
+    async def insert_legacy():
+        async with state["db"].connect() as conn:
+            await conn.execute(
+                "INSERT INTO experiments (id, spec_json, status, priority, "
+                "created_at, queued_at) VALUES (?, ?, 'failed', 0, ?, ?)",
+                (
+                    "legacy-empty",
+                    _json.dumps({"model": "m", "dataset": []}),
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            await conn.commit()
+
+    _run(insert_legacy())
+    r = client.get("/experiments", headers=HEADERS)
+    assert r.status_code == 200
+    ids = [e["id"] for e in r.json()]
+    assert "legacy-empty" in ids
+
+
 def test_submit_with_missing_local_path_returns_422(state, client, tmp_path):
     missing = tmp_path / "absent.jsonl"
     r = client.post(
