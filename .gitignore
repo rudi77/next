@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# trainpipe runtime data (sqlite, logs, outputs, mlflow store)
+/data/*
+!/data/.gitkeep
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
