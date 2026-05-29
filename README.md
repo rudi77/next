@@ -126,6 +126,22 @@ Expected ms-swift JSONL formats:
 {"messages": [...], "images": ["/path/to/img.jpg"]}                   # multimodal
 ```
 
+## Web UI
+
+The API serves a single-page UI at **http://server:8080/** (no separate
+build step — Tailwind + Alpine.js via CDN). Tabs:
+
+- **Experiments** — submit form, table with status badges, detail panel
+  with live log tail, MLflow run link, cancel button
+- **Studies** — Optuna sweep submit form + progress table
+- **Datasets** — drag-and-drop upload, click-to-copy `ds:<id>` ref,
+  preview, delete
+- **GPUs** — card per device with lease state
+
+API key is stored in browser `localStorage` — first visit prompts for
+it. Polling refreshes every 4 s; the detail panel polls logs every
+2.5 s while open.
+
 ## Submitting an experiment
 
 ```bash

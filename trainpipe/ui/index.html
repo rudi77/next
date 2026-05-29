@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>trainpipe</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .badge { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium; }
+    .log-pane {
+      background: #0b0f17;
+      color: #d5dae3;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen">
+<div x-data="trainpipe()" x-init="init()" x-cloak>
+
+  <!-- ── Top bar ───────────────────────────────────────────────────── -->
+  <header class="bg-slate-900 text-white shadow">
+    <div class="max-w-screen-xl mx-auto px-4 py-3 flex items-center gap-4">
+      <h1 class="text-xl font-semibold">trainpipe</h1>
+      <span class="text-xs text-slate-400" x-text="baseUrl"></span>
+      <div class="flex-1"></div>
+      <a x-show="mlflowUrl" :href="mlflowUrl" target="_blank"
+         class="text-sm text-cyan-300 hover:text-cyan-100 underline">MLflow ↗</a>
+      <button @click="apiKeyOpen = true" class="text-sm bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded">
+        <template x-if="apiKey"><span>🔑 Key set</span></template>
+        <template x-if="!apiKey"><span class="text-amber-300">🔑 Set API key</span></template>
+      </button>
+      <span class="w-2 h-2 rounded-full"
+            :class="health === 'ok' ? 'bg-emerald-400' : 'bg-rose-500'"></span>
+    </div>
+
+    <!-- Tabs -->
+    <nav class="max-w-screen-xl mx-auto px-4 pb-0 flex gap-1">
+      <template x-for="t in ['experiments','studies','datasets','gpus']" :key="t">
+        <button @click="tab = t"
+                :class="tab === t ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'"
+                class="px-4 py-2 rounded-t text-sm capitalize">
+          <span x-text="t"></span>
+        </button>
+      </template>
+    </nav>
+  </header>
+
+  <!-- ── API key modal ─────────────────────────────────────────────── -->
+  <div x-show="apiKeyOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-40"
+       @click.self="apiKeyOpen = false">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+      <h3 class="font-semibold mb-2">API key</h3>
+      <p class="text-sm text-slate-600 mb-3">Stored in your browser only.</p>
+      <input type="password" x-model="apiKeyDraft" placeholder="X-API-Key"
+             class="w-full border rounded px-3 py-2 text-sm" />
+      <div class="mt-4 flex justify-end gap-2">
+        <button @click="apiKeyOpen = false" class="px-3 py-1 rounded text-sm">Cancel</button>
+        <button @click="saveApiKey()" class="px-3 py-1 rounded text-sm bg-slate-900 text-white">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="max-w-screen-xl mx-auto px-4 py-6">
+
+    <!-- ── Experiments tab ─────────────────────────────────────────── -->
+    <section x-show="tab === 'experiments'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Experiments</h2>
+        <button @click="openSubmitExp()" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">
+          + Submit
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2">Model</th>
+              <th class="px-3 py-2">GPUs</th>
+              <th class="px-3 py-2">Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="e in experiments" :key="e.id">
+              <tr class="border-t hover:bg-slate-50 cursor-pointer" @click="openDetail(e.id)">
+                <td class="px-3 py-2 font-medium">
+                  <span x-text="e.spec.name || '(unnamed)'"></span>
+                  <span class="text-slate-400 text-xs ml-1" x-text="e.id.slice(0,8)"></span>
+                </td>
+                <td class="px-3 py-2">
+                  <span class="badge inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                        :class="statusColor(e.status)" x-text="e.status"></span>
+                </td>
+                <td class="px-3 py-2 text-slate-600" x-text="e.spec.model"></td>
+                <td class="px-3 py-2 text-slate-600" x-text="(e.gpu_ids||[]).join(',') || '—'"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs" x-text="fmtTime(e.created_at)"></td>
+                <td class="px-3 py-2 text-right">
+                  <a x-show="e.mlflow_run_id && mlflowUrl"
+                     :href="mlflowUrl + '/#/experiments/' + (e.mlflow_experiment_id||0) + '/runs/' + e.mlflow_run_id"
+                     target="_blank" @click.stop=""
+                     class="text-cyan-700 hover:underline text-xs">MLflow ↗</a>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="experiments.length === 0">
+              <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No experiments yet. Submit one to get started.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Studies tab ─────────────────────────────────────────────── -->
+    <section x-show="tab === 'studies'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Studies</h2>
+        <button @click="openSubmitStudy()" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">
+          + Sweep
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Status</th>
+              <th class="px-3 py-2">Progress</th>
+              <th class="px-3 py-2">Best</th>
+              <th class="px-3 py-2">Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="s in studies" :key="s.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium">
+                  <span x-text="s.name"></span>
+                  <span class="text-slate-400 text-xs ml-1" x-text="s.id.slice(0,8)"></span>
+                </td>
+                <td class="px-3 py-2">
+                  <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                        :class="statusColor(s.status)" x-text="s.status"></span>
+                </td>
+                <td class="px-3 py-2 text-slate-600">
+                  <span x-text="s.n_trials_completed"></span>
+                  <span class="text-slate-400">/</span>
+                  <span x-text="s.n_trials_target ?? '∞'"></span>
+                </td>
+                <td class="px-3 py-2 font-mono text-xs" x-text="s.best_value?.toFixed(4) ?? '—'"></td>
+                <td class="px-3 py-2 text-slate-500 text-xs" x-text="fmtTime(s.created_at)"></td>
+                <td class="px-3 py-2 text-right">
+                  <button x-show="s.status === 'active'"
+                          @click="cancelStudy(s.id)"
+                          class="text-rose-600 hover:underline text-xs">Cancel</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="studies.length === 0">
+              <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No studies yet.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Datasets tab ────────────────────────────────────────────── -->
+    <section x-show="tab === 'datasets'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Datasets</h2>
+        <button @click="openUploadDataset()" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">
+          + Upload
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">Name</th>
+              <th class="px-3 py-2">Ref</th>
+              <th class="px-3 py-2">Format</th>
+              <th class="px-3 py-2">Rows</th>
+              <th class="px-3 py-2">Size</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="d in datasets" :key="d.id">
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium" x-text="d.name"></td>
+                <td class="px-3 py-2">
+                  <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs cursor-pointer"
+                        @click="copy('ds:' + d.id)"
+                        :title="'Click to copy ds:' + d.id">
+                    ds:<span x-text="d.id.slice(0,8)"></span>…
+                  </code>
+                </td>
+                <td class="px-3 py-2 text-slate-600" x-text="d.format"></td>
+                <td class="px-3 py-2 text-slate-600" x-text="d.line_count ?? '—'"></td>
+                <td class="px-3 py-2 text-slate-600 text-xs" x-text="fmtBytes(d.size_bytes)"></td>
+                <td class="px-3 py-2 text-right space-x-2">
+                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline text-xs">Preview</button>
+                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline text-xs">Delete</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="datasets.length === 0">
+              <td colspan="6" class="px-3 py-8 text-center text-slate-400 text-sm">
+                No datasets uploaded yet. Click + Upload to add a JSONL / CSV / Parquet file.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── GPUs tab ────────────────────────────────────────────────── -->
+    <section x-show="tab === 'gpus'">
+      <h2 class="text-lg font-semibold mb-3">GPUs</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="lease in (gpus.leases || [])" :key="lease.index">
+          <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center justify-between">
+              <h3 class="font-semibold text-slate-800">
+                GPU <span x-text="lease.index"></span>
+              </h3>
+              <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                    :class="lease.experiment_id ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'"
+                    x-text="lease.experiment_id ? 'busy' : 'free'"></span>
+            </div>
+            <p class="text-sm text-slate-600 mt-1" x-text="lease.name"></p>
+            <p class="text-xs text-slate-500 mt-1">
+              <span x-text="(lease.memory_total_mb/1024).toFixed(1)"></span> GB VRAM
+            </p>
+            <p x-show="lease.experiment_id" class="text-xs mt-3">
+              Leased to:
+              <button @click="tab='experiments'; openDetail(lease.experiment_id)"
+                      class="text-cyan-700 hover:underline" x-text="lease.experiment_id.slice(0,12) + '…'"></button>
+            </p>
+            <p x-show="lease.leased_at" class="text-xs text-slate-500" x-text="fmtTime(lease.leased_at)"></p>
+          </div>
+        </template>
+        <div x-show="(gpus.leases || []).length === 0"
+             class="bg-white rounded-lg shadow p-8 text-center text-slate-500 col-span-full">
+          No GPUs detected (pynvml found no NVIDIA driver). Verify with <code>nvidia-smi</code>.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ── Submit experiment modal ─────────────────────────────────── -->
+  <div x-show="submitExpOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+       @click.self="submitExpOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+      <div class="px-5 py-3 border-b flex justify-between items-center">
+        <h3 class="font-semibold">Submit experiment</h3>
+        <button @click="submitExpOpen = false">✕</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">name</label>
+            <input x-model="expDraft.name" class="w-full border rounded px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">gpu_count</label>
+            <input type="number" min="1" x-model.number="expDraft.gpu_count"
+                   class="w-full border rounded px-2 py-1.5 text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">model</label>
+          <input x-model="expDraft.model" class="w-full border rounded px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">sft_type</label>
+          <select x-model="expDraft.sft_type" class="w-full border rounded px-2 py-1.5 text-sm">
+            <option>lora</option><option>full</option><option>qlora</option>
+            <option>longlora</option><option>adalora</option><option>ia3</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">
+            dataset <span class="text-slate-400">(one per line — HF id, /abs/path, or ds:&lt;id&gt;)</span>
+          </label>
+          <textarea x-model="expDraft.dataset" rows="3"
+                    class="w-full border rounded px-2 py-1.5 text-sm font-mono"
+                    placeholder="AI-ModelScope/alpaca-gpt4-data-en#100"></textarea>
+          <div class="text-xs text-slate-500 mt-1" x-show="datasets.length > 0">
+            Available uploads:
+            <template x-for="d in datasets" :key="d.id">
+              <button class="mr-2 underline text-cyan-700"
+                      @click="appendDataset('ds:' + d.id)"
+                      x-text="d.name + ' (ds:' + d.id.slice(0,6) + '…)'"></button>
+            </template>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">val_dataset (optional, one per line)</label>
+          <textarea x-model="expDraft.val_dataset" rows="2"
+                    class="w-full border rounded px-2 py-1.5 text-sm font-mono"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">hyperparameters (JSON)</label>
+          <textarea x-model="expDraft.hyperparameters" rows="6"
+                    class="w-full border rounded px-2 py-1.5 text-sm font-mono"></textarea>
+        </div>
+        <div x-show="expError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="expError"></div>
+      </div>
+      <div class="px-5 py-3 border-t flex justify-end gap-2">
+        <button @click="submitExpOpen = false" class="px-3 py-1.5 text-sm">Cancel</button>
+        <button @click="submitExp()" :disabled="submitting"
+                class="px-3 py-1.5 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Submit</span>
+          <span x-show="submitting">Submitting…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Submit study modal ────────────────────────────────────────── -->
+  <div x-show="submitStudyOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+       @click.self="submitStudyOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+      <div class="px-5 py-3 border-b flex justify-between items-center">
+        <h3 class="font-semibold">Start sweep</h3>
+        <button @click="submitStudyOpen = false">✕</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <p class="text-sm text-slate-600">Edit a full StudyConfig JSON.</p>
+        <textarea x-model="studyDraft" rows="22"
+                  class="w-full border rounded px-2 py-1.5 text-xs font-mono"></textarea>
+        <div x-show="studyError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="studyError"></div>
+      </div>
+      <div class="px-5 py-3 border-t flex justify-end gap-2">
+        <button @click="submitStudyOpen = false" class="px-3 py-1.5 text-sm">Cancel</button>
+        <button @click="submitStudy()" :disabled="submitting"
+                class="px-3 py-1.5 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          Start sweep
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Upload dataset modal ──────────────────────────────────────── -->
+  <div x-show="uploadOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+       @click.self="uploadOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
+      <div class="px-5 py-3 border-b flex justify-between items-center">
+        <h3 class="font-semibold">Upload dataset</h3>
+        <button @click="uploadOpen = false">✕</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <div>
+          <label class="text-xs text-slate-600 block">name</label>
+          <input x-model="uploadDraft.name" class="w-full border rounded px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">description (optional)</label>
+          <input x-model="uploadDraft.description" class="w-full border rounded px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">file (.jsonl / .json / .csv / .tsv / .parquet)</label>
+          <input type="file" @change="uploadDraft.file = $event.target.files[0]"
+                 class="w-full text-sm" />
+        </div>
+        <div x-show="uploadError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="uploadError"></div>
+      </div>
+      <div class="px-5 py-3 border-t flex justify-end gap-2">
+        <button @click="uploadOpen = false" class="px-3 py-1.5 text-sm">Cancel</button>
+        <button @click="submitUpload()" :disabled="submitting"
+                class="px-3 py-1.5 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          Upload
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Experiment detail modal ───────────────────────────────────── -->
+  <div x-show="detail" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4"
+       @click.self="closeDetail()">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div class="px-5 py-3 border-b flex justify-between items-center">
+        <div>
+          <h3 class="font-semibold" x-text="detail?.spec?.name || '(unnamed)'"></h3>
+          <p class="text-xs text-slate-500 font-mono" x-text="detail?.id"></p>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                :class="statusColor(detail?.status)" x-text="detail?.status"></span>
+          <button x-show="detail && (detail.status === 'queued' || detail.status === 'running')"
+                  @click="cancelExp(detail.id)"
+                  class="text-rose-600 hover:underline text-sm">Cancel</button>
+          <a x-show="detail?.mlflow_run_id && mlflowUrl"
+             :href="mlflowUrl + '/#/experiments/' + (detail.mlflow_experiment_id||0) + '/runs/' + detail.mlflow_run_id"
+             target="_blank" class="text-cyan-700 hover:underline text-sm">MLflow ↗</a>
+          <button @click="closeDetail()" class="text-slate-400">✕</button>
+        </div>
+      </div>
+      <div class="p-5 grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div class="text-xs text-slate-500">model</div>
+          <div class="font-mono" x-text="detail?.spec?.model"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500">sft_type</div>
+          <div x-text="detail?.spec?.sft_type"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500">gpu_ids</div>
+          <div x-text="(detail?.gpu_ids||[]).join(', ') || '—'"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500">duration</div>
+          <div x-text="fmtDuration(detail?.started_at, detail?.finished_at)"></div>
+        </div>
+        <div class="col-span-2">
+          <div class="text-xs text-slate-500">dataset</div>
+          <div class="font-mono text-xs">
+            <template x-for="d in (detail?.spec?.dataset||[])" :key="d">
+              <div x-text="d"></div>
+            </template>
+          </div>
+        </div>
+        <div x-show="detail?.error" class="col-span-2">
+          <div class="text-xs text-slate-500">error</div>
+          <div class="font-mono text-xs text-rose-700" x-text="detail?.error"></div>
+        </div>
+      </div>
+      <div class="flex-1 px-5 pb-5 overflow-hidden flex flex-col min-h-0">
+        <div class="text-xs text-slate-500 mb-1">log</div>
+        <div class="log-pane flex-1 rounded p-3 overflow-y-auto scrollbar-thin" x-ref="logPane"
+             x-text="detailLog || '(no log yet)'"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Preview / toast ──────────────────────────────────────────── -->
+  <div x-show="toast" class="fixed bottom-4 right-4 bg-slate-900 text-white text-sm px-3 py-2 rounded shadow-lg"
+       x-text="toast"
+       x-transition.opacity></div>
+
+</div>
+
+<script>
+function trainpipe() {
+  return {
+    // ── config + state ─────────────────────────────────────────
+    baseUrl: window.location.origin,
+    apiKey: localStorage.getItem('trainpipe_api_key') || '',
+    apiKeyDraft: '',
+    apiKeyOpen: false,
+    mlflowUrl: '',
+    health: 'unknown',
+    tab: localStorage.getItem('trainpipe_tab') || 'experiments',
+    toast: '',
+    submitting: false,
+    pollTimer: null,
+    detail: null,
+    detailLog: '',
+    detailLogTimer: null,
+
+    experiments: [],
+    studies: [],
+    datasets: [],
+    gpus: { total: 0, free: [], leases: [] },
+
+    submitExpOpen: false,
+    expDraft: { name: '', model: 'Qwen/Qwen2.5-0.5B-Instruct', sft_type: 'lora',
+                gpu_count: 1, dataset: '', val_dataset: '',
+                hyperparameters: '{"num_train_epochs":1,"per_device_train_batch_size":1,"logging_steps":1,"max_length":512,"lora_rank":8}' },
+    expError: '',
+
+    submitStudyOpen: false,
+    studyDraft: '',
+    studyError: '',
+
+    uploadOpen: false,
+    uploadDraft: { name: '', description: '', file: null },
+    uploadError: '',
+
+    // ── lifecycle ──────────────────────────────────────────────
+    async init() {
+      this.$watch('tab', v => localStorage.setItem('trainpipe_tab', v));
+      this.apiKeyDraft = this.apiKey;
+      try {
+        const cfg = await (await fetch('/ui/config')).json();
+        this.mlflowUrl = cfg.mlflow_tracking_uri;
+      } catch (e) { /* non-fatal */ }
+      await this.refreshAll();
+      this.pollTimer = setInterval(() => this.refreshAll(), 4000);
+    },
+
+    saveApiKey() {
+      this.apiKey = this.apiKeyDraft.trim();
+      localStorage.setItem('trainpipe_api_key', this.apiKey);
+      this.apiKeyOpen = false;
+      this.refreshAll();
+    },
+
+    // ── http helpers ───────────────────────────────────────────
+    headers() {
+      return this.apiKey ? { 'X-API-Key': this.apiKey } : {};
+    },
+    async api(path, opts = {}) {
+      const resp = await fetch(this.baseUrl + path, {
+        ...opts,
+        headers: { ...this.headers(), ...(opts.headers || {}) },
+      });
+      if (!resp.ok) {
+        let body;
+        try { body = await resp.json(); } catch { body = await resp.text(); }
+        throw new Error(typeof body === 'string' ? body : JSON.stringify(body));
+      }
+      const ct = resp.headers.get('content-type') || '';
+      return ct.startsWith('application/json') ? resp.json() : resp.text();
+    },
+
+    // ── data loaders ───────────────────────────────────────────
+    async refreshAll() {
+      try {
+        const hp = await fetch(this.baseUrl + '/health');
+        this.health = hp.ok ? 'ok' : 'down';
+      } catch { this.health = 'down'; }
+      if (!this.apiKey) return;
+      const tasks = [
+        this.api('/experiments?limit=100').then(r => this.experiments = r).catch(() => {}),
+        this.api('/studies').then(r => this.studies = r).catch(() => {}),
+        this.api('/datasets').then(r => this.datasets = r).catch(() => {}),
+        this.api('/gpus').then(r => this.gpus = r).catch(() => {}),
+      ];
+      await Promise.all(tasks);
+    },
+
+    // ── experiments ────────────────────────────────────────────
+    openSubmitExp() {
+      this.expError = '';
+      this.submitExpOpen = true;
+    },
+    appendDataset(ref) {
+      const lines = this.expDraft.dataset.split('\n').filter(Boolean);
+      lines.push(ref);
+      this.expDraft.dataset = lines.join('\n');
+    },
+    async submitExp() {
+      this.expError = '';
+      let hp;
+      try { hp = JSON.parse(this.expDraft.hyperparameters); }
+      catch (e) { this.expError = 'hyperparameters: invalid JSON — ' + e.message; return; }
+      const spec = {
+        name: this.expDraft.name || null,
+        model: this.expDraft.model,
+        sft_type: this.expDraft.sft_type,
+        dataset: this.expDraft.dataset.split('\n').map(s => s.trim()).filter(Boolean),
+        val_dataset: this.expDraft.val_dataset.split('\n').map(s => s.trim()).filter(Boolean),
+        gpu_count: this.expDraft.gpu_count,
+        hyperparameters: hp,
+      };
+      this.submitting = true;
+      try {
+        const r = await this.api('/experiments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(spec),
+        });
+        this.submitExpOpen = false;
+        this.flash(`Submitted ${r.experiment_id.slice(0,8)}…`);
+        this.refreshAll();
+      } catch (e) { this.expError = e.message; }
+      finally { this.submitting = false; }
+    },
+    async cancelExp(id) {
+      try {
+        await this.api(`/experiments/${id}/cancel`, { method: 'POST' });
+        this.flash('Cancelled');
+        if (this.detail?.id === id) this.openDetail(id);
+        this.refreshAll();
+      } catch (e) { this.flash('Cancel failed: ' + e.message); }
+    },
+
+    // ── detail view ────────────────────────────────────────────
+    async openDetail(id) {
+      this.detail = await this.api(`/experiments/${id}`).catch(e => null);
+      this.detailLog = '';
+      this.startLogPoll();
+    },
+    closeDetail() {
+      this.detail = null;
+      this.stopLogPoll();
+    },
+    startLogPoll() {
+      this.stopLogPoll();
+      const fetchLog = async () => {
+        if (!this.detail) return;
+        try {
+          const text = await this.api(`/experiments/${this.detail.id}/logs`);
+          this.detailLog = typeof text === 'string' ? text : JSON.stringify(text);
+          this.$nextTick(() => {
+            const pane = this.$refs.logPane;
+            if (pane) pane.scrollTop = pane.scrollHeight;
+          });
+          // also refresh the detail itself for status changes
+          this.detail = await this.api(`/experiments/${this.detail.id}`);
+        } catch (e) { /* ignore */ }
+      };
+      fetchLog();
+      this.detailLogTimer = setInterval(fetchLog, 2500);
+    },
+    stopLogPoll() {
+      if (this.detailLogTimer) { clearInterval(this.detailLogTimer); this.detailLogTimer = null; }
+    },
+
+    // ── studies ────────────────────────────────────────────────
+    openSubmitStudy() {
+      this.studyError = '';
+      this.studyDraft = JSON.stringify({
+        name: 'sweep-' + new Date().toISOString().slice(0,10),
+        base_spec: {
+          model: this.expDraft.model,
+          dataset: ['AI-ModelScope/alpaca-gpt4-data-en#100'],
+          sft_type: 'lora',
+        },
+        search_space: {
+          'hyperparameters.learning_rate': { kind: 'loguniform', low: 1e-5, high: 1e-3 },
+          'hyperparameters.lora_rank': { kind: 'categorical', choices: [4, 8, 16] },
+        },
+        target_metric: 'eval/loss',
+        direction: 'minimize',
+        n_trials: 8,
+        max_concurrent: 1,
+        sampler: 'tpe',
+      }, null, 2);
+      this.submitStudyOpen = true;
+    },
+    async submitStudy() {
+      this.studyError = '';
+      let config;
+      try { config = JSON.parse(this.studyDraft); }
+      catch (e) { this.studyError = 'invalid JSON — ' + e.message; return; }
+      this.submitting = true;
+      try {
+        const r = await this.api('/studies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        this.submitStudyOpen = false;
+        this.flash(`Study ${r.study_id.slice(0,8)}… started`);
+        this.refreshAll();
+      } catch (e) { this.studyError = e.message; }
+      finally { this.submitting = false; }
+    },
+    async cancelStudy(id) {
+      try {
+        await this.api(`/studies/${id}/cancel`, { method: 'POST' });
+        this.flash('Study cancelled');
+        this.refreshAll();
+      } catch (e) { this.flash('Cancel failed: ' + e.message); }
+    },
+
+    // ── datasets ───────────────────────────────────────────────
+    openUploadDataset() {
+      this.uploadDraft = { name: '', description: '', file: null };
+      this.uploadError = '';
+      this.uploadOpen = true;
+    },
+    async submitUpload() {
+      if (!this.uploadDraft.file) { this.uploadError = 'pick a file'; return; }
+      if (!this.uploadDraft.name) { this.uploadError = 'name required'; return; }
+      const fd = new FormData();
+      fd.append('file', this.uploadDraft.file);
+      fd.append('name', this.uploadDraft.name);
+      if (this.uploadDraft.description) fd.append('description', this.uploadDraft.description);
+      this.submitting = true;
+      try {
+        const r = await fetch(this.baseUrl + '/datasets', {
+          method: 'POST', headers: this.headers(), body: fd,
+        });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(JSON.stringify(body.detail || body));
+        }
+        this.uploadOpen = false;
+        this.flash('Uploaded ' + this.uploadDraft.name);
+        this.refreshAll();
+      } catch (e) { this.uploadError = e.message; }
+      finally { this.submitting = false; }
+    },
+    async previewDataset(d) {
+      try {
+        const text = await this.api(`/datasets/${d.id}/preview?n=20`);
+        alert(text);
+      } catch (e) { this.flash('Preview failed: ' + e.message); }
+    },
+    async deleteDataset(d) {
+      if (!confirm(`Delete dataset "${d.name}"? Files will be removed from disk.`)) return;
+      try {
+        await this.api(`/datasets/${d.id}`, { method: 'DELETE' });
+        this.flash('Deleted');
+        this.refreshAll();
+      } catch (e) { this.flash('Delete failed: ' + e.message); }
+    },
+
+    // ── helpers ────────────────────────────────────────────────
+    statusColor(s) {
+      return {
+        queued:    'bg-slate-200 text-slate-700',
+        running:   'bg-blue-100 text-blue-800',
+        completed: 'bg-emerald-100 text-emerald-800',
+        failed:    'bg-rose-100 text-rose-800',
+        cancelled: 'bg-amber-100 text-amber-800',
+        active:    'bg-blue-100 text-blue-800',
+      }[s] || 'bg-slate-200 text-slate-700';
+    },
+    fmtTime(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const now = new Date();
+      if (d.toDateString() === now.toDateString()) {
+        return d.toLocaleTimeString();
+      }
+      return d.toLocaleString();
+    },
+    fmtDuration(start, end) {
+      if (!start) return '—';
+      const a = new Date(start);
+      const b = end ? new Date(end) : new Date();
+      const s = Math.floor((b - a) / 1000);
+      if (s < 60) return `${s}s`;
+      if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+      return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+    },
+    fmtBytes(n) {
+      if (n == null) return '—';
+      if (n < 1024) return n + ' B';
+      if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+      if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + ' MB';
+      return (n/(1024*1024*1024)).toFixed(2) + ' GB';
+    },
+    copy(text) {
+      navigator.clipboard.writeText(text);
+      this.flash('Copied ' + text);
+    },
+    flash(msg) {
+      this.toast = msg;
+      setTimeout(() => { if (this.toast === msg) this.toast = ''; }, 2500);
+    },
+  };
+}
+</script>
+</body>
+</html>
