@@ -17,6 +17,7 @@ from ..settings import settings
 from ..watches.manager import WatchManager
 from .routes import (
     active_learning,
+    compliance,
     datasets,
     evals,
     experiments,
@@ -137,3 +138,4 @@ app.include_router(active_learning.router)
 app.include_router(pipelines.router)
 app.include_router(synth.router)
 app.include_router(watches.router)
+app.include_router(compliance.router)

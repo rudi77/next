@@ -43,7 +43,7 @@
 
     <!-- Tabs (scroll-x on narrow phones) -->
     <nav class="max-w-screen-xl mx-auto px-2 sm:px-4 pb-0 flex gap-1 overflow-x-auto scrollbar-thin">
-      <template x-for="t in ['experiments','studies','pipelines','evals','models','playground','active-learning','watches','datasets','gpus']" :key="t">
+      <template x-for="t in ['experiments','studies','pipelines','evals','models','playground','active-learning','watches','datasets','synth','compliance','gpus']" :key="t">
         <button @click="tab = t"
                 :class="tab === t ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'"
                 class="shrink-0 px-3 sm:px-4 py-2.5 sm:py-2 rounded-t text-sm">
@@ -75,9 +75,15 @@
     <section x-show="tab === 'experiments'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Experiments</h2>
-        <button @click="openSubmitExp()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
-          + Submit
-        </button>
+        <div class="flex gap-2">
+          <button @click="openBatchSubmit()" class="border border-slate-300 text-slate-700 text-sm px-3 py-2 rounded hover:bg-slate-50"
+                  title="Submit N experiments atomically from a JSON list">
+            📦 Batch
+          </button>
+          <button @click="openSubmitExp()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
+            + Submit
+          </button>
+        </div>
       </div>
 
       <div class="bg-white rounded-lg shadow overflow-x-auto">
@@ -253,9 +259,17 @@
     <section x-show="tab === 'datasets'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Datasets</h2>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap justify-end">
+          <button @click="openMix()" class="border border-slate-300 text-slate-700 text-sm px-3 py-2 rounded hover:bg-slate-50"
+                  title="Combine multiple datasets with weights">
+            ⚙ Mix
+          </button>
           <button @click="openLsImport()" class="border border-slate-300 text-slate-700 text-sm px-3 py-2 rounded hover:bg-slate-50">
             ⇲ Label Studio
+          </button>
+          <button @click="openUploadBundle()" class="border border-slate-300 text-slate-700 text-sm px-3 py-2 rounded hover:bg-slate-50"
+                  title="Upload a .zip with manifest.jsonl + images/">
+            🗜 Bundle
           </button>
           <button @click="openUploadDataset()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
             + Upload
@@ -302,8 +316,14 @@
                 <td class="px-3 py-2 text-slate-600 hidden md:table-cell" x-text="d.line_count ?? '—'"></td>
                 <td class="px-3 py-2 text-slate-600 text-xs hidden md:table-cell" x-text="fmtBytes(d.size_bytes)"></td>
                 <td class="px-3 py-2 text-right whitespace-nowrap">
-                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline text-sm sm:text-xs px-2 py-1">Preview</button>
-                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline text-sm sm:text-xs px-2 py-1">Delete</button>
+                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline text-xs px-1.5 py-1">Preview</button>
+                  <button @click="openSplit(d)" class="text-emerald-700 hover:underline text-xs px-1.5 py-1"
+                          title="Deterministic train/val split">Split</button>
+                  <button @click="openRedact(d)" class="text-amber-700 hover:underline text-xs px-1.5 py-1"
+                          title="Remove PII and register as new dataset">Redact</button>
+                  <button @click="openLineage(d)" class="text-slate-700 hover:underline text-xs px-1.5 py-1"
+                          title="Models that trained on this dataset">Lineage</button>
+                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline text-xs px-1.5 py-1">Delete</button>
                 </td>
               </tr>
             </template>
@@ -314,6 +334,191 @@
             </tr>
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- ── Synth tab ──────────────────────────────────────────────── -->
+    <section x-show="tab === 'synth'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Synthetic data</h2>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4 sm:p-5 space-y-3 text-sm max-w-2xl">
+        <p class="text-xs text-slate-600">
+          Expand a source dataset using a teacher LLM. Result is registered as a
+          new dataset (visible in the Datasets tab) with <code>_source</code>
+          provenance per row. Use provider <code class="bg-slate-100 px-1 rounded">mock</code>
+          for testing without external API calls.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">provider</label>
+            <select x-model="synthDraft.provider" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option value="mock">mock (deterministic, no API)</option>
+              <option value="anthropic">anthropic</option>
+              <option value="openai">openai</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">model</label>
+            <input x-model="synthDraft.model"
+                   placeholder="claude-3-5-sonnet | gpt-4o-mini | mock-1"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">source dataset</label>
+          <select x-model="synthDraft.source_dataset" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+            <option value="">— pick —</option>
+            <template x-for="d in datasets" :key="d.id">
+              <option :value="'ds:' + d.id" x-text="d.name + ' (' + (d.line_count ?? '?') + ' rows)'"></option>
+            </template>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">instruction</label>
+          <textarea x-model="synthDraft.instruction" rows="3"
+                    placeholder="Generate paraphrases of the user query that preserve intent."
+                    class="w-full border rounded px-2 py-2 text-sm font-mono"></textarea>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">target_count</label>
+            <input type="number" min="1" max="10000" x-model.number="synthDraft.target_count"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">max_tokens</label>
+            <input type="number" min="1" max="32768" x-model.number="synthDraft.max_tokens"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">seed</label>
+            <input type="number" x-model.number="synthDraft.seed"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">output name</label>
+          <input x-model="synthDraft.name"
+                 placeholder="paraphrased-seeds-v1"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="synthError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="synthError"></div>
+        <div x-show="synthResult" class="text-emerald-800 bg-emerald-50 border border-emerald-200 p-2 rounded text-xs">
+          Created: <strong x-text="synthResult?.name"></strong> —
+          <code x-text="'ds:' + (synthResult?.id || '')"></code>
+          <span x-show="synthResult?.line_count" x-text="' (' + synthResult?.line_count + ' rows)'"></span>
+        </div>
+        <div class="pt-2 flex justify-end">
+          <button @click="submitSynth()" :disabled="synthRunning"
+                  class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+            <span x-show="!synthRunning">Generate</span>
+            <span x-show="synthRunning">Generating…</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Compliance / Forget tab ───────────────────────────────── -->
+    <section x-show="tab === 'compliance'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Compliance — Forget scan</h2>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4 sm:p-5 space-y-3 text-sm max-w-2xl">
+        <p class="text-xs text-slate-600">
+          Scan every registered dataset for a search term and report which
+          datasets contain hits and which models trained on those datasets.
+          <strong>Read-only</strong> — nothing is deleted or redacted here. Use
+          the dataset row's <em>Redact</em> action plus a re-training run for the
+          actual GDPR workflow.
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block">search term</label>
+          <input x-model="forgetDraft.term"
+                 placeholder="jane.doe@example.com"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono" />
+        </div>
+        <div class="flex gap-4 text-xs">
+          <label class="flex items-center gap-1.5">
+            <input type="checkbox" x-model="forgetDraft.regex" />
+            <span>treat as regex (Python <code>re.search</code>)</span>
+          </label>
+          <label class="flex items-center gap-1.5">
+            <input type="checkbox" x-model="forgetDraft.case_sensitive" />
+            <span>case-sensitive</span>
+          </label>
+        </div>
+        <div x-show="forgetError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="forgetError"></div>
+        <div class="flex justify-end gap-2">
+          <button @click="runForgetScan()" :disabled="forgetRunning || !forgetDraft.term"
+                  class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+            <span x-show="!forgetRunning">Scan</span>
+            <span x-show="forgetRunning">Scanning…</span>
+          </button>
+        </div>
+
+        <template x-if="forgetReport">
+          <div class="space-y-3 pt-3 border-t">
+            <div class="text-xs text-slate-700">
+              Scanned <strong x-text="forgetReport.scanned_datasets"></strong> datasets;
+              <strong x-text="forgetReport.hits?.length || 0"></strong> with hits;
+              <strong x-text="forgetReport.impacted_models?.length || 0"></strong> impacted models.
+            </div>
+
+            <div x-show="forgetReport.hits?.length > 0">
+              <div class="text-xs font-semibold text-slate-700 mb-1">Hits</div>
+              <table class="w-full text-xs">
+                <thead class="bg-slate-50 text-slate-600 text-left">
+                  <tr>
+                    <th class="px-2 py-1">Dataset</th>
+                    <th class="px-2 py-1">Hits</th>
+                    <th class="px-2 py-1">Line numbers (sample)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="h in forgetReport.hits" :key="h.dataset_id">
+                    <tr class="border-t">
+                      <td class="px-2 py-1 font-mono" x-text="h.dataset_name"></td>
+                      <td class="px-2 py-1" x-text="h.hit_count"></td>
+                      <td class="px-2 py-1 text-slate-500"
+                          x-text="(h.sample_line_numbers || []).slice(0, 12).join(', ')"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <div x-show="forgetReport.impacted_models?.length > 0">
+              <div class="text-xs font-semibold text-slate-700 mb-1">Impacted models</div>
+              <ul class="space-y-1">
+                <template x-for="m in forgetReport.impacted_models" :key="m.model_id">
+                  <li class="flex items-center gap-2 text-xs">
+                    <span class="font-mono" x-text="m.name + '@' + m.version"></span>
+                    <code class="bg-slate-100 px-1 rounded" x-text="m.model_id"></code>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <div x-show="forgetReport.skipped_datasets?.length > 0">
+              <div class="text-xs text-amber-700 mb-1">Skipped datasets</div>
+              <ul class="text-xs text-slate-500">
+                <template x-for="s in forgetReport.skipped_datasets" :key="s.dataset_id || s.path">
+                  <li>
+                    <span x-text="s.dataset_name || s.dataset_id || s.path"></span>:
+                    <span x-text="s.reason"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <div x-show="forgetReport.hits?.length === 0" class="text-xs text-emerald-700">
+              No hits — your term doesn't appear in any registered dataset.
+            </div>
+          </div>
+        </template>
       </div>
     </section>
 
@@ -484,7 +689,12 @@
                    class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
           </div>
         </div>
-        <div class="flex justify-end gap-2">
+        <div class="flex justify-between items-center gap-2">
+          <label class="text-xs flex items-center gap-1.5 text-slate-600"
+                 :class="playground.refB ? 'opacity-40' : ''">
+            <input type="checkbox" x-model="playground.stream" :disabled="!!playground.refB" />
+            <span>stream tokens (single-model only)</span>
+          </label>
           <button @click="runPlayground()" :disabled="playground.running || !playground.prompt"
                   class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
             <span x-show="!playground.running">Run</span>
@@ -757,6 +967,9 @@
     <section x-show="tab === 'watches'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Watches</h2>
+        <button @click="openCreateWatch()" class="bg-slate-900 text-white text-sm px-3 py-2 rounded">
+          + New watch
+        </button>
       </div>
       <p class="text-sm text-slate-600 mb-3">
         Continuous-training triggers — fire a pipeline on an interval or
@@ -1215,11 +1428,15 @@
   <div x-show="alQueueOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
        @click.self="alQueueOpen = false">
     <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[95vh] flex flex-col">
-      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center gap-2">
         <div class="min-w-0 flex-1">
           <h3 class="font-semibold">Annotation queue</h3>
           <p class="text-xs text-slate-500 font-mono" x-text="alQueueRunId"></p>
         </div>
+        <button @click="openAlPush()" class="text-xs border border-slate-300 px-2 py-1 rounded hover:bg-slate-50"
+                title="Send unannotated queue items to a Label Studio project">
+          ⇲ Push to LS
+        </button>
         <button @click="alQueueOpen = false" class="text-2xl leading-none px-2">✕</button>
       </div>
       <div class="overflow-auto flex-1">
@@ -1255,6 +1472,50 @@
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── AL → Label Studio push modal ─────────────────────────────── -->
+  <div x-show="alPushOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-40 p-2 sm:p-4"
+       @click.self="alPushOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Push queue to Label Studio</h3>
+        <button @click="alPushOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          Each unannotated queue item becomes one LS task. The model's
+          prediction is attached as a pre-annotation.
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block">base url</label>
+          <input x-model="alPushDraft.base_url" placeholder="https://ls.example.com"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">API token</label>
+          <input type="password" x-model="alPushDraft.token" autocomplete="off"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">project_id</label>
+          <input type="number" min="1" x-model.number="alPushDraft.project_id"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="alPushError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="alPushError"></div>
+        <div x-show="alPushResult" class="text-emerald-800 bg-emerald-50 border border-emerald-200 p-2 rounded text-xs"
+             x-text="alPushResult"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="alPushOpen = false" class="px-4 py-2 text-sm">Close</button>
+        <button @click="submitAlPush()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Push</span>
+          <span x-show="submitting">Pushing…</span>
+        </button>
       </div>
     </div>
   </div>
@@ -1345,6 +1606,357 @@
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
           Upload
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bundle upload (zip with images + manifest) ───────────────── -->
+  <div x-show="bundleOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="bundleOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Upload bundle (.zip)</h3>
+        <button @click="bundleOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          The zip must contain exactly one <code class="bg-slate-100 px-1 rounded">.jsonl</code>
+          manifest plus an <code class="bg-slate-100 px-1 rounded">images/</code> directory.
+          Each row in the manifest references an image by relative path.
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block">name</label>
+          <input x-model="bundleDraft.name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">description (optional)</label>
+          <input x-model="bundleDraft.description" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">file (.zip)</label>
+          <input type="file" accept=".zip" @change="bundleDraft.file = $event.target.files[0]"
+                 class="w-full text-base sm:text-sm py-2" />
+        </div>
+        <div x-show="bundleError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="bundleError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="bundleOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitBundle()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Upload</span>
+          <span x-show="submitting">Uploading…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Split dataset modal ──────────────────────────────────────── -->
+  <div x-show="splitOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="splitOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Split dataset</h3>
+        <button @click="splitOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          Splitting <span class="font-mono" x-text="splitDraft.source_name"></span>
+          into two new datasets. JSONL only; deterministic given seed.
+        </p>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-600 block">ratio (train:val)</label>
+            <input x-model="splitDraft.ratio" placeholder="90:10"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">seed</label>
+            <input type="number" x-model.number="splitDraft.seed"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">train name</label>
+          <input x-model="splitDraft.train_name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">val name</label>
+          <input x-model="splitDraft.val_name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="splitError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="splitError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="splitOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitSplit()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Split</span>
+          <span x-show="submitting">Splitting…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Redact PII modal ─────────────────────────────────────────── -->
+  <div x-show="redactOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="redactOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Redact PII</h3>
+        <button @click="redactOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          Creates a <strong>new</strong> dataset with matched entities removed.
+          Source <span class="font-mono" x-text="redactDraft.source_name"></span> is untouched (audit trail preserved).
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block mb-1">entities</label>
+          <div class="grid grid-cols-2 gap-1.5">
+            <template x-for="ent in ['email','phone','iban','credit_card','de_tax_id']" :key="ent">
+              <label class="flex items-center gap-2 text-xs">
+                <input type="checkbox" :value="ent" x-model="redactDraft.entities" />
+                <span x-text="ent"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">name (optional; defaults to "&lt;source&gt; (redacted)")</label>
+          <input x-model="redactDraft.name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="redactError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="redactError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="redactOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitRedact()" :disabled="submitting || redactDraft.entities.length === 0"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Redact</span>
+          <span x-show="submitting">Redacting…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Mix datasets modal ───────────────────────────────────────── -->
+  <div x-show="mixOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="mixOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Mix datasets</h3>
+        <button @click="mixOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          Weighted sampling (with replacement) across 2–16 source datasets. Lineage
+          to every parent is recorded for later GDPR queries.
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block">name</label>
+          <input x-model="mixDraft.name" class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block mb-1">sources (dataset + weight)</label>
+          <div class="space-y-1.5">
+            <template x-for="(src, i) in mixDraft.sources" :key="i">
+              <div class="flex gap-1.5 items-center">
+                <select x-model="src.dataset_id" class="flex-1 border rounded px-2 py-2 text-xs">
+                  <option value="">—select dataset—</option>
+                  <template x-for="d in datasets" :key="d.id">
+                    <option :value="d.id" x-text="d.name + ' (' + (d.line_count ?? '?') + ' rows)'"></option>
+                  </template>
+                </select>
+                <input type="number" step="0.1" min="0.01" x-model.number="src.weight"
+                       class="w-20 border rounded px-2 py-2 text-xs" />
+                <button @click="mixDraft.sources.splice(i, 1)"
+                        :disabled="mixDraft.sources.length <= 2"
+                        class="text-rose-600 text-sm px-2 disabled:opacity-30">✕</button>
+              </div>
+            </template>
+          </div>
+          <button @click="mixDraft.sources.push({dataset_id:'', weight:1.0})"
+                  :disabled="mixDraft.sources.length >= 16"
+                  class="mt-2 text-xs text-slate-700 hover:underline disabled:opacity-30">
+            + Add source
+          </button>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-600 block">target_count (optional)</label>
+            <input type="number" min="1" x-model.number="mixDraft.target_count"
+                   placeholder="sum of sources"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">seed</label>
+            <input type="number" x-model.number="mixDraft.seed"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div x-show="mixError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="mixError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="mixOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitMix()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Mix</span>
+          <span x-show="submitting">Mixing…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Batch experiment submit modal ─────────────────────────────── -->
+  <div x-show="batchOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="batchOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Batch submit experiments</h3>
+        <button @click="batchOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          Atomic: either all specs queue, or none do. The body must be a JSON
+          object with a <code>specs</code> array of ExperimentSpec objects.
+        </p>
+        <textarea x-model="batchDraft" rows="20"
+                  class="w-full border rounded px-2 py-2 text-xs font-mono"></textarea>
+        <div x-show="batchError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="batchError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="batchOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitBatch()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Submit batch</span>
+          <span x-show="submitting">Submitting…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Create watch modal ───────────────────────────────────────── -->
+  <div x-show="watchOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="watchOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[95vh] overflow-y-auto">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Create watch</h3>
+        <button @click="watchOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm">
+        <p class="text-xs text-slate-600">
+          Defines a trigger that fires a pipeline. Watches are created
+          <strong>disabled</strong> — use the Enable button on the row after creation.
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block">name</label>
+          <input x-model="watchDraft.name"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">kind</label>
+          <select x-model="watchDraft.kind"
+                  class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+            <option value="interval">interval — fire every N seconds</option>
+            <option value="metric_threshold">metric_threshold — fire when an eval metric crosses a threshold</option>
+          </select>
+        </div>
+        <div x-show="watchDraft.kind === 'interval'">
+          <label class="text-xs text-slate-600 block">interval_seconds</label>
+          <input type="number" min="60" x-model.number="watchDraft.interval_seconds"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div x-show="watchDraft.kind === 'metric_threshold'" class="space-y-3">
+          <div>
+            <label class="text-xs text-slate-600 block">suite_id (eval suite to monitor)</label>
+            <select x-model="watchDraft.suite_id" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option value="">— pick suite —</option>
+              <template x-for="s in evalSuites" :key="s.id">
+                <option :value="s.id" x-text="s.name"></option>
+              </template>
+            </select>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-xs text-slate-600 block">metric_name</label>
+              <input x-model="watchDraft.metric_name" placeholder="exact_match"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-600 block">threshold</label>
+              <input type="number" step="0.01" x-model.number="watchDraft.threshold"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">model_name (optional, for context)</label>
+          <input x-model="watchDraft.model_name"
+                 class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-600 block">pipeline_config (JSON)</label>
+          <textarea x-model="watchDraft.pipeline_config" rows="10"
+                    class="w-full border rounded px-2 py-2 text-xs font-mono"></textarea>
+          <p class="text-xs text-slate-500 mt-1">
+            Full <code>PipelineConfig</code> object — name + ordered list of
+            ExperimentSpec stages. The watch will submit this pipeline each time
+            it fires.
+          </p>
+        </div>
+        <div x-show="watchError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="watchError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="watchOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitWatch()" :disabled="submitting"
+                class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+          <span x-show="!submitting">Create</span>
+          <span x-show="submitting">Creating…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Lineage modal (dataset → models that trained on it) ──────── -->
+  <div x-show="lineageOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="lineageOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-b flex justify-between items-center">
+        <div class="min-w-0">
+          <h3 class="font-semibold">Trained on this dataset</h3>
+          <p class="text-xs text-slate-500 truncate" x-text="lineageDraft.source_name"></p>
+        </div>
+        <button @click="lineageOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 text-sm overflow-y-auto flex-1">
+        <label class="flex items-center gap-2 text-xs">
+          <input type="checkbox" x-model="lineageDraft.recursive" @change="loadLineage()" />
+          <span>include derived datasets (splits, mixes, redacts)</span>
+        </label>
+        <div x-show="lineageLoading" class="text-xs text-slate-500">Loading…</div>
+        <div x-show="!lineageLoading && lineageDraft.model_ids.length === 0"
+             class="text-xs text-slate-500 italic">
+          No registered models trained on this dataset
+          <span x-show="!lineageDraft.recursive">— try enabling "include derived"</span>.
+        </div>
+        <ul x-show="!lineageLoading && lineageDraft.model_ids.length > 0"
+            class="space-y-1">
+          <template x-for="id in lineageDraft.model_ids" :key="id">
+            <li class="flex items-center gap-2">
+              <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs flex-1 truncate" x-text="id"></code>
+              <button @click="copy(id)" class="text-xs text-slate-600 hover:underline">copy</button>
+              <button @click="lineageOpen = false; tab = 'models'"
+                      class="text-xs text-cyan-700 hover:underline">go to Models →</button>
+            </li>
+          </template>
+        </ul>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="lineageOpen = false" class="px-4 py-2 text-sm">Close</button>
       </div>
     </div>
   </div>
@@ -1691,10 +2303,16 @@ function trainpipe() {
       maxNewTokens: 256,
       temperature: 0.0,
       topP: 1.0,
+      stream: false,
       running: false,
       error: '',
       results: [],
     },
+
+    // Phase F: batch submit
+    batchOpen: false,
+    batchDraft: '',
+    batchError: '',
     createSuiteOpen: false,
     suiteDraft: '',
     suiteError: '',
@@ -1719,6 +2337,55 @@ function trainpipe() {
     lsImportOpen: false,
     lsDraft: { base_url: '', token: '', project_id: 1, import_kind: '', name: '' },
     lsError: '',
+
+    // Phase A: dataset-gap modals (split, redact, bundle, mix, lineage)
+    splitOpen: false,
+    splitDraft: { dataset_id: '', source_name: '', ratio: '90:10', seed: 0, train_name: '', val_name: '' },
+    splitError: '',
+
+    redactOpen: false,
+    redactDraft: { dataset_id: '', source_name: '', entities: ['email','phone','iban','credit_card'], name: '' },
+    redactError: '',
+
+    bundleOpen: false,
+    bundleDraft: { name: '', description: '', file: null },
+    bundleError: '',
+
+    mixOpen: false,
+    mixDraft: { name: '', sources: [{dataset_id:'',weight:1.0},{dataset_id:'',weight:1.0}], target_count: null, seed: 0 },
+    mixError: '',
+
+    lineageOpen: false,
+    lineageDraft: { dataset_id: '', source_name: '', recursive: false, model_ids: [] },
+    lineageLoading: false,
+
+    // Phase B: synth tab
+    synthDraft: { provider: 'mock', model: 'mock-1', source_dataset: '', instruction: '',
+                  target_count: 100, max_tokens: 1024, seed: 0, name: '' },
+    synthError: '',
+    synthRunning: false,
+    synthResult: null,
+
+    // Phase C: compliance (forget-scan) tab
+    forgetDraft: { term: '', regex: false, case_sensitive: false },
+    forgetError: '',
+    forgetRunning: false,
+    forgetReport: null,
+
+    // Phase D: watch create modal
+    watchOpen: false,
+    watchDraft: {
+      name: '', kind: 'interval', interval_seconds: 3600,
+      suite_id: '', metric_name: '', threshold: 0.5,
+      model_name: '', pipeline_config: '',
+    },
+    watchError: '',
+
+    // Phase E: AL → Label Studio push
+    alPushOpen: false,
+    alPushDraft: { base_url: '', token: '', project_id: 1 },
+    alPushError: '',
+    alPushResult: '',
 
     // ── lifecycle ──────────────────────────────────────────────
     async init() {
@@ -2393,6 +3060,74 @@ function trainpipe() {
     },
 
     // ── watches ───────────────────────────────────────────────
+    openCreateWatch() {
+      this.watchError = '';
+      const examplePipeline = {
+        name: 'retrain-' + new Date().toISOString().slice(0,10),
+        concurrency: 1,
+        stages: [
+          {
+            name: 'sft',
+            model: this.expDraft.model,
+            sft_type: 'lora',
+            dataset: ['ds:<source-id>'],
+            hyperparameters: { num_train_epochs: 1, lora_rank: 8 },
+          },
+        ],
+      };
+      this.watchDraft = {
+        name: 'watch-' + new Date().toISOString().slice(0,10),
+        kind: 'interval',
+        interval_seconds: 3600,
+        suite_id: this.evalSuites[0]?.id || '',
+        metric_name: 'exact_match',
+        threshold: 0.5,
+        model_name: '',
+        pipeline_config: JSON.stringify(examplePipeline, null, 2),
+      };
+      this.watchOpen = true;
+    },
+    async submitWatch() {
+      this.watchError = '';
+      if (!this.watchDraft.name) { this.watchError = 'Name required'; return; }
+      let pipelineConfig;
+      try { pipelineConfig = JSON.parse(this.watchDraft.pipeline_config); }
+      catch (e) { this.watchError = 'pipeline_config: invalid JSON — ' + e.message; return; }
+      const payload = {
+        name: this.watchDraft.name,
+        kind: this.watchDraft.kind,
+        pipeline_config: pipelineConfig,
+      };
+      if (this.watchDraft.model_name) payload.model_name = this.watchDraft.model_name;
+      if (this.watchDraft.kind === 'interval') {
+        if (!this.watchDraft.interval_seconds) {
+          this.watchError = 'interval_seconds required'; return;
+        }
+        payload.interval_seconds = this.watchDraft.interval_seconds;
+      } else if (this.watchDraft.kind === 'metric_threshold') {
+        if (!this.watchDraft.suite_id) { this.watchError = 'suite_id required'; return; }
+        if (!this.watchDraft.metric_name) { this.watchError = 'metric_name required'; return; }
+        payload.suite_id = this.watchDraft.suite_id;
+        payload.metric_name = this.watchDraft.metric_name;
+        payload.threshold = this.watchDraft.threshold;
+      }
+      this.submitting = true;
+      try {
+        await this.api('/watches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.watchOpen = false;
+        this.flash('Watch created (disabled — enable it on the row)');
+        this.refreshAll();
+      } catch (e) {
+        this.watchError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
     async enableWatch(id) {
       try {
         await this.api(`/watches/${id}/enable`, { method: 'POST' });
@@ -2510,6 +3245,40 @@ function trainpipe() {
       } catch (e) { this.flash('Mark failed: ' + e.message); }
     },
 
+    openAlPush() {
+      this.alPushError = '';
+      this.alPushResult = '';
+      this.alPushOpen = true;
+    },
+    async submitAlPush() {
+      this.alPushError = '';
+      this.alPushResult = '';
+      if (!this.alPushDraft.base_url || !this.alPushDraft.token) {
+        this.alPushError = 'base_url and token required'; return;
+      }
+      if (!this.alQueueRunId) {
+        this.alPushError = 'no run selected — open a queue first'; return;
+      }
+      this.submitting = true;
+      try {
+        const r = await this.api(`/active-learning/runs/${this.alQueueRunId}/push-labelstudio`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: this.alPushDraft.base_url,
+            token: this.alPushDraft.token,
+            project_id: this.alPushDraft.project_id,
+          }),
+        });
+        this.alPushResult = `Pushed ${r.pushed} items to project ${this.alPushDraft.project_id}`;
+        this.flash(`Pushed ${r.pushed} items to LS`);
+      } catch (e) {
+        this.alPushError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
     // ── label studio import ────────────────────────────────────
     openLsImport() {
       this.lsError = '';
@@ -2545,6 +3314,231 @@ function trainpipe() {
       }
     },
 
+    // ── dataset: split ─────────────────────────────────────────
+    openSplit(d) {
+      this.splitError = '';
+      this.splitDraft = {
+        dataset_id: d.id,
+        source_name: d.name,
+        ratio: '90:10',
+        seed: 0,
+        train_name: d.name + '-train',
+        val_name: d.name + '-val',
+      };
+      this.splitOpen = true;
+    },
+    async submitSplit() {
+      this.splitError = '';
+      this.submitting = true;
+      try {
+        await this.api(`/datasets/${this.splitDraft.dataset_id}/split`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ratio: this.splitDraft.ratio,
+            seed: this.splitDraft.seed,
+            train_name: this.splitDraft.train_name || null,
+            val_name: this.splitDraft.val_name || null,
+          }),
+        });
+        this.splitOpen = false;
+        this.flash('Split — train + val created');
+        this.refreshAll();
+      } catch (e) {
+        this.splitError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    // ── dataset: redact ────────────────────────────────────────
+    openRedact(d) {
+      this.redactError = '';
+      this.redactDraft = {
+        dataset_id: d.id,
+        source_name: d.name,
+        entities: ['email', 'phone', 'iban', 'credit_card'],
+        name: '',
+      };
+      this.redactOpen = true;
+    },
+    async submitRedact() {
+      this.redactError = '';
+      if (this.redactDraft.entities.length === 0) {
+        this.redactError = 'Pick at least one entity type';
+        return;
+      }
+      this.submitting = true;
+      try {
+        const payload = { entities: this.redactDraft.entities };
+        if (this.redactDraft.name) payload.name = this.redactDraft.name;
+        await this.api(`/datasets/${this.redactDraft.dataset_id}/redact`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.redactOpen = false;
+        this.flash('Redacted dataset created');
+        this.refreshAll();
+      } catch (e) {
+        this.redactError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    // ── dataset: bundle upload ─────────────────────────────────
+    openUploadBundle() {
+      this.bundleError = '';
+      this.bundleDraft = { name: '', description: '', file: null };
+      this.bundleOpen = true;
+    },
+    async submitBundle() {
+      this.bundleError = '';
+      if (!this.bundleDraft.file) { this.bundleError = 'Pick a .zip file'; return; }
+      if (!this.bundleDraft.name) { this.bundleError = 'Name is required'; return; }
+      const form = new FormData();
+      form.append('file', this.bundleDraft.file);
+      form.append('name', this.bundleDraft.name);
+      if (this.bundleDraft.description) form.append('description', this.bundleDraft.description);
+      this.submitting = true;
+      try {
+        const resp = await fetch(this.baseUrl + '/datasets/bundle', {
+          method: 'POST', headers: this.headers(), body: form,
+        });
+        if (!resp.ok) {
+          let body;
+          try { body = await resp.json(); } catch { body = await resp.text(); }
+          throw new Error(typeof body === 'string' ? body : JSON.stringify(body));
+        }
+        this.bundleOpen = false;
+        this.flash('Bundle uploaded');
+        this.refreshAll();
+      } catch (e) {
+        this.bundleError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    // ── dataset: mix ───────────────────────────────────────────
+    openMix() {
+      this.mixError = '';
+      this.mixDraft = {
+        name: '',
+        sources: [{dataset_id:'', weight:1.0}, {dataset_id:'', weight:1.0}],
+        target_count: null,
+        seed: 0,
+      };
+      this.mixOpen = true;
+    },
+    async submitMix() {
+      this.mixError = '';
+      if (!this.mixDraft.name) { this.mixError = 'Name is required'; return; }
+      const sources = this.mixDraft.sources.filter(s => s.dataset_id);
+      if (sources.length < 2) { this.mixError = 'Pick at least 2 source datasets'; return; }
+      if (sources.some(s => !s.weight || s.weight <= 0)) {
+        this.mixError = 'All weights must be > 0';
+        return;
+      }
+      const payload = { name: this.mixDraft.name, sources, seed: this.mixDraft.seed };
+      if (this.mixDraft.target_count) payload.target_count = this.mixDraft.target_count;
+      this.submitting = true;
+      try {
+        await this.api('/datasets/mixes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.mixOpen = false;
+        this.flash('Mixed dataset created');
+        this.refreshAll();
+      } catch (e) {
+        this.mixError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    // ── dataset: lineage (which models trained on this) ────────
+    async openLineage(d) {
+      this.lineageDraft = {
+        dataset_id: d.id, source_name: d.name,
+        recursive: false, model_ids: [],
+      };
+      this.lineageOpen = true;
+      await this.loadLineage();
+    },
+    async loadLineage() {
+      this.lineageLoading = true;
+      try {
+        const q = this.lineageDraft.recursive ? '?recursive=true' : '';
+        const r = await this.api(`/datasets/${this.lineageDraft.dataset_id}/models${q}`);
+        this.lineageDraft.model_ids = r.model_ids || [];
+      } catch (e) {
+        this.flash('Lineage lookup failed: ' + e.message);
+        this.lineageDraft.model_ids = [];
+      } finally {
+        this.lineageLoading = false;
+      }
+    },
+
+    // ── synth ──────────────────────────────────────────────────
+    async submitSynth() {
+      this.synthError = '';
+      this.synthResult = null;
+      if (!this.synthDraft.source_dataset) { this.synthError = 'Pick a source dataset'; return; }
+      if (!this.synthDraft.instruction.trim()) { this.synthError = 'Instruction is required'; return; }
+      if (!this.synthDraft.name.trim()) { this.synthError = 'Output name is required'; return; }
+      this.synthRunning = true;
+      try {
+        const r = await this.api('/synth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: this.synthDraft.provider,
+            model: this.synthDraft.model,
+            source_dataset: this.synthDraft.source_dataset,
+            instruction: this.synthDraft.instruction,
+            target_count: this.synthDraft.target_count,
+            max_tokens: this.synthDraft.max_tokens,
+            seed: this.synthDraft.seed,
+            name: this.synthDraft.name,
+          }),
+        });
+        this.synthResult = r;
+        this.flash('Synth done — see Datasets tab');
+        this.refreshAll();
+      } catch (e) {
+        this.synthError = e.message;
+      } finally {
+        this.synthRunning = false;
+      }
+    },
+
+    // ── compliance: forget-scan ────────────────────────────────
+    async runForgetScan() {
+      this.forgetError = '';
+      this.forgetReport = null;
+      if (!this.forgetDraft.term) { this.forgetError = 'Enter a search term'; return; }
+      this.forgetRunning = true;
+      try {
+        this.forgetReport = await this.api('/compliance/forget-scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            term: this.forgetDraft.term,
+            is_regex: this.forgetDraft.regex,
+            case_sensitive: this.forgetDraft.case_sensitive,
+          }),
+        });
+      } catch (e) {
+        this.forgetError = e.message;
+      } finally {
+        this.forgetRunning = false;
+      }
+    },
+
     // ── playground ─────────────────────────────────────────────
     async runPlayground() {
       this.playground.error = '';
@@ -2562,7 +3556,48 @@ function trainpipe() {
       };
       this.playground.running = true;
       try {
-        if (refs.length === 1) {
+        if (refs.length === 1 && this.playground.stream) {
+          // Streaming branch — SSE via fetch+ReadableStream (EventSource
+          // can't carry custom headers, so we can't use it for X-API-Key).
+          const placeholder = { model_ref: refs[0], base_model: refs[0], adapter_path: null, prediction: '' };
+          this.playground.results = [placeholder];
+          const resp = await fetch(this.baseUrl + '/inferences/stream', {
+            method: 'POST',
+            headers: { ...this.headers(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_ref: refs[0], prompt: this.playground.prompt, params }),
+          });
+          if (!resp.ok) {
+            let body;
+            try { body = await resp.json(); } catch { body = await resp.text(); }
+            throw new Error(typeof body === 'string' ? body : JSON.stringify(body));
+          }
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            // SSE events are separated by blank lines.
+            let idx;
+            while ((idx = buf.indexOf('\n\n')) !== -1) {
+              const raw = buf.slice(0, idx);
+              buf = buf.slice(idx + 2);
+              const lines = raw.split('\n');
+              let ev = 'message', data = '';
+              for (const l of lines) {
+                if (l.startsWith('event:')) ev = l.slice(6).trim();
+                else if (l.startsWith('data:')) data += l.slice(5).trimStart();
+              }
+              if (ev === 'token') {
+                this.playground.results[0].prediction += data;
+              } else if (ev === 'error') {
+                this.playground.error = data;
+              }
+              // event "done" -> nothing to do; loop will exit when stream closes.
+            }
+          }
+        } else if (refs.length === 1) {
           const body = await this.api('/inferences', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2585,6 +3620,49 @@ function trainpipe() {
         this.playground.error = e.message;
       } finally {
         this.playground.running = false;
+      }
+    },
+
+    // ── experiments: batch submit ──────────────────────────────
+    openBatchSubmit() {
+      this.batchError = '';
+      this.batchDraft = JSON.stringify({
+        specs: [
+          {
+            name: 'exp-1',
+            model: this.expDraft.model,
+            sft_type: 'lora',
+            dataset: ['AI-ModelScope/alpaca-gpt4-data-en#100'],
+            hyperparameters: { num_train_epochs: 1, lora_rank: 8 },
+          },
+        ],
+      }, null, 2);
+      this.batchOpen = true;
+    },
+    async submitBatch() {
+      this.batchError = '';
+      let body;
+      try { body = JSON.parse(this.batchDraft); }
+      catch (e) { this.batchError = 'invalid JSON — ' + e.message; return; }
+      if (!body.specs || !Array.isArray(body.specs) || body.specs.length === 0) {
+        this.batchError = 'body must include a non-empty "specs" array';
+        return;
+      }
+      this.submitting = true;
+      try {
+        const r = await this.api('/experiments/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        this.batchOpen = false;
+        const n = r.experiment_ids ? r.experiment_ids.length : body.specs.length;
+        this.flash(`Batch queued (${n} experiments)`);
+        this.refreshAll();
+      } catch (e) {
+        this.batchError = e.message;
+      } finally {
+        this.submitting = false;
       }
     },
 
