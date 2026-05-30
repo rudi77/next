@@ -164,3 +164,8 @@ work), but the httpx client is constructed on first call via
   in `scheduler/loop.py` and `_read_metric` in `autoresearch/study.py`
   each lazy-import mlflow inside the function. Keeps the import cost
   off the cold path and lets tests skip MLflow setup.
+
+  ## Smoke Tests
+  Smike tests shall be executed to guarantee a certain level of software quality
+  
+  - [SMOKE.md](SMOKE.md)

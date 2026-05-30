@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>trainpipe · Fluent</title>
+
+  <!-- Fluent UI Web Components (build-free, ESM via CDN) -->
+  <script type="module">
+    import {
+      provideFluentDesignSystem, allComponents,
+      baseLayerLuminance, StandardLuminance,
+    } from "https://esm.sh/@fluentui/web-components@2.6.1";
+    provideFluentDesignSystem().register(allComponents);
+    // expose theme switch to Alpine
+    window.__fluentTheme = (dark) =>
+      baseLayerLuminance.setValueFor(
+        document.body,
+        dark ? StandardLuminance.DarkMode : StandardLuminance.LightMode,
+      );
+    window.__fluentTheme(false);
+  </script>
+
+  <!-- Alpine for reactivity (same idiom as the current UI) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+
+  <style>
+    :root {
+      --bg:        #f5f5f5;
+      --surface:   #ffffff;
+      --surface-2: #fafafa;
+      --stroke:    #e0e0e0;
+      --stroke-2:  #ededed;
+      --text:      #242424;
+      --text-2:    #616161;
+      --text-3:    #8a8a8a;
+      --brand:     #0f6cbd;
+      --brand-2:   #115ea3;
+      --shadow:    0 1.6px 3.6px rgba(0,0,0,.10), 0 .3px .9px rgba(0,0,0,.07);
+      --shadow-lg: 0 12.8px 28.8px rgba(0,0,0,.18), 0 2.4px 7.4px rgba(0,0,0,.10);
+      --radius:    6px;
+    }
+    [data-theme="dark"] {
+      --bg:        #1b1b1b;
+      --surface:   #292929;
+      --surface-2: #242424;
+      --stroke:    #404040;
+      --stroke-2:  #383838;
+      --text:      #ffffff;
+      --text-2:    #c7c7c7;
+      --text-3:    #9a9a9a;
+      --shadow:    0 1.6px 3.6px rgba(0,0,0,.30), 0 .3px .9px rgba(0,0,0,.22);
+      --shadow-lg: 0 12.8px 28.8px rgba(0,0,0,.42), 0 2.4px 7.4px rgba(0,0,0,.28);
+    }
+
+    * { box-sizing: border-box; }
+    [x-cloak] { display: none !important; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── top bar ─────────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--stroke);
+      box-shadow: var(--shadow);
+      position: sticky; top: 0; z-index: 20;
+    }
+    .bar {
+      max-width: 1280px; margin: 0 auto;
+      display: flex; align-items: center; gap: 16px;
+      padding: 10px 24px;
+    }
+    .logo { display:flex; align-items:center; gap:10px; font-size:18px; font-weight:600; }
+    .logo .dot { width:28px;height:28px;border-radius:7px;
+      background:linear-gradient(135deg,var(--brand),#2899f5);
+      display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px; }
+    .muted { color: var(--text-3); font-size:12px; }
+    .grow { flex: 1; }
+    .health { width:9px;height:9px;border-radius:50%; }
+    .health.ok   { background:#107c10; box-shadow:0 0 0 3px rgba(16,124,16,.18); }
+    .health.down { background:#d13438; box-shadow:0 0 0 3px rgba(209,52,56,.18); }
+
+    /* ── pivot (tabs) ────────────────────────────────────────── */
+    nav.pivot {
+      max-width:1280px; margin:0 auto; display:flex; gap:4px; padding:0 24px;
+    }
+    .pivot button {
+      background:none; border:none; cursor:pointer; font:inherit;
+      color:var(--text-2); padding:10px 14px 12px; position:relative;
+      font-weight:600; font-size:14px;
+    }
+    .pivot button:hover { color:var(--text); }
+    .pivot button.active { color:var(--brand); }
+    .pivot button.active::after {
+      content:""; position:absolute; left:14px; right:14px; bottom:6px; height:2.5px;
+      background:var(--brand); border-radius:2px;
+    }
+
+    main { max-width:1280px; margin:0 auto; padding:24px; }
+    .row { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+    h2 { font-size:20px; font-weight:600; margin:0; }
+
+    /* ── card / table ────────────────────────────────────────── */
+    .card {
+      background:var(--surface); border:1px solid var(--stroke);
+      border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden;
+    }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    thead th {
+      text-align:left; padding:11px 16px; color:var(--text-2);
+      font-weight:600; background:var(--surface-2); border-bottom:1px solid var(--stroke);
+      font-size:12px; text-transform:uppercase; letter-spacing:.03em;
+    }
+    tbody td { padding:11px 16px; border-bottom:1px solid var(--stroke-2); }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr.clickable { cursor:pointer; }
+    tbody tr.clickable:hover { background:var(--surface-2); }
+    .mono { font-family:"Cascadia Code",Consolas,monospace; }
+    .sub  { color:var(--text-3); font-size:11px; }
+    .empty { padding:48px; text-align:center; color:var(--text-3); }
+
+    /* ── status badge ────────────────────────────────────────── */
+    .badge {
+      display:inline-flex; align-items:center; gap:5px;
+      padding:2px 9px; border-radius:11px; font-size:11.5px; font-weight:600;
+    }
+    .badge::before { content:""; width:6px;height:6px;border-radius:50%; background:currentColor; }
+    .st-queued    { background:rgba(96,96,96,.14);  color:#5c5c5c; }
+    .st-running   { background:rgba(15,108,189,.14); color:var(--brand); }
+    .st-active    { background:rgba(15,108,189,.14); color:var(--brand); }
+    .st-completed { background:rgba(16,124,16,.14);  color:#0e700e; }
+    .st-failed    { background:rgba(209,52,56,.14);  color:#c4292d; }
+    .st-cancelled { background:rgba(202,128,5,.16);  color:#9a6204; }
+    [data-theme="dark"] .st-queued    { color:#bdbdbd; }
+    [data-theme="dark"] .st-completed { color:#6ccb6c; }
+    [data-theme="dark"] .st-failed    { color:#ff8a8d; }
+    [data-theme="dark"] .st-cancelled { color:#f0b450; }
+
+    /* ── gpu cards ───────────────────────────────────────────── */
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:16px; }
+    .gpu  { padding:18px; }
+    .gpu .meter { height:6px; border-radius:3px; background:var(--stroke); margin-top:12px; overflow:hidden; }
+    .gpu .meter > i { display:block; height:100%; background:var(--brand); }
+
+    /* ── modal ───────────────────────────────────────────────── */
+    .scrim { position:fixed; inset:0; background:rgba(0,0,0,.4);
+      display:flex; align-items:flex-start; justify-content:center; padding:48px 16px; z-index:40;
+      overflow:auto; }
+    .modal { background:var(--surface); border-radius:8px; box-shadow:var(--shadow-lg);
+      width:100%; max-width:720px; }
+    .modal.sm { max-width:440px; }
+    .modal.lg { max-width:900px; }
+    .modal-h { padding:18px 22px; border-bottom:1px solid var(--stroke);
+      display:flex; align-items:center; justify-content:space-between; }
+    .modal-h h3 { margin:0; font-size:17px; font-weight:600; }
+    .modal-b { padding:22px; display:flex; flex-direction:column; gap:14px; }
+    .modal-f { padding:14px 22px; border-top:1px solid var(--stroke);
+      display:flex; justify-content:flex-end; gap:10px; }
+    .field label { display:block; font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:5px; }
+    .field .hint { font-weight:400; color:var(--text-3); }
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    fluent-text-field, fluent-number-field, fluent-select, fluent-text-area { width:100%; }
+    .err { background:rgba(209,52,56,.10); border:1px solid rgba(209,52,56,.35);
+      color:#c4292d; padding:9px 12px; border-radius:6px; font-size:13px; }
+
+    .kv { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:22px; }
+    .kv .k { font-size:11px; color:var(--text-3); text-transform:uppercase; letter-spacing:.03em; }
+    .kv .v { margin-top:2px; }
+    .logpane {
+      background:#0b0f17; color:#d5dae3; font-family:"Cascadia Code",Consolas,monospace;
+      font-size:12px; line-height:1.55; white-space:pre-wrap; word-break:break-word;
+      padding:14px; border-radius:6px; height:300px; overflow:auto; margin:0 22px 22px;
+    }
+    .chip { cursor:pointer; }
+    .toast { position:fixed; bottom:20px; right:20px; background:var(--text); color:var(--bg);
+      padding:10px 16px; border-radius:6px; box-shadow:var(--shadow-lg); font-size:13px; z-index:60; }
+    a.link { color:var(--brand); text-decoration:none; font-weight:600; }
+    a.link:hover { text-decoration:underline; }
+    .linkbtn { background:none;border:none;color:var(--brand);cursor:pointer;font:inherit;font-weight:600;padding:0; }
+    .linkbtn:hover { text-decoration:underline; }
+    .danger { color:#c4292d; }
+  </style>
+</head>
+
+<body x-data="trainpipe()" x-init="init()" x-cloak :data-theme="dark ? 'dark' : 'light'">
+
+  <!-- ── top bar ──────────────────────────────────────────────── -->
+  <header>
+    <div class="bar">
+      <div class="logo"><span class="dot">⚙</span> trainpipe</div>
+      <span class="muted" x-text="baseUrl"></span>
+      <div class="grow"></div>
+      <a class="link" x-show="mlflowUrl" :href="mlflowUrl" target="_blank">MLflow ↗</a>
+      <fluent-switch :checked="dark" @change="toggleTheme($event.target.checked)">
+        <span slot="unchecked-message">☀</span><span slot="checked-message">☾</span>
+      </fluent-switch>
+      <fluent-button appearance="outline" @click="apiKeyOpen=true">
+        <span x-text="apiKey ? '🔑 Key set' : '🔑 Set API key'"></span>
+      </fluent-button>
+      <span class="health" :class="health" :title="'API: '+health"></span>
+    </div>
+    <nav class="pivot">
+      <template x-for="t in tabs" :key="t">
+        <button :class="tab===t ? 'active':''" @click="tab=t" x-text="cap(t)"></button>
+      </template>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ══ Experiments ═══════════════════════════════════════════ -->
+    <section x-show="tab==='experiments'">
+      <div class="row">
+        <h2>Experiments</h2>
+        <fluent-button appearance="accent" @click="openSubmitExp()">+ Submit</fluent-button>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Status</th><th>Model</th><th>GPUs</th><th>Created</th><th></th>
+          </tr></thead>
+          <tbody>
+            <template x-for="e in experiments" :key="e.id">
+              <tr class="clickable" @click="openDetail(e.id)">
+                <td><strong x-text="e.spec.name || '(unnamed)'"></strong>
+                    <span class="sub mono" x-text="e.id.slice(0,8)"></span></td>
+                <td><span class="badge" :class="'st-'+e.status" x-text="e.status"></span></td>
+                <td class="mono" x-text="e.spec.model"></td>
+                <td x-text="(e.gpu_ids||[]).join(',') || '—'"></td>
+                <td class="sub" x-text="fmtTime(e.created_at)"></td>
+                <td style="text-align:right" @click.stop>
+                  <a class="link" x-show="e.mlflow_run_id && mlflowUrl"
+                     :href="mlflowUrl+'/#/experiments/'+(e.mlflow_experiment_id||0)+'/runs/'+e.mlflow_run_id"
+                     target="_blank">MLflow ↗</a>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="experiments.length===0"><td colspan="6" class="empty">
+              No experiments yet. Submit one to get started.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ Studies ═══════════════════════════════════════════════ -->
+    <section x-show="tab==='studies'">
+      <div class="row">
+        <h2>Studies</h2>
+        <fluent-button appearance="accent" @click="openSubmitStudy()">+ Sweep</fluent-button>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Status</th><th>Progress</th><th>Best</th><th>Created</th><th></th>
+          </tr></thead>
+          <tbody>
+            <template x-for="s in studies" :key="s.id">
+              <tr>
+                <td><strong x-text="s.name"></strong>
+                    <span class="sub mono" x-text="s.id.slice(0,8)"></span></td>
+                <td><span class="badge" :class="'st-'+s.status" x-text="s.status"></span></td>
+                <td><span x-text="s.n_trials_completed"></span>
+                    <span class="sub">/ <span x-text="s.n_trials_target ?? '∞'"></span></span></td>
+                <td class="mono" x-text="s.best_value?.toFixed(4) ?? '—'"></td>
+                <td class="sub" x-text="fmtTime(s.created_at)"></td>
+                <td style="text-align:right">
+                  <button class="linkbtn danger" x-show="s.status==='active'"
+                          @click="cancelStudy(s.id)">Cancel</button></td>
+              </tr>
+            </template>
+            <tr x-show="studies.length===0"><td colspan="6" class="empty">No studies yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ Datasets ══════════════════════════════════════════════ -->
+    <section x-show="tab==='datasets'">
+      <div class="row">
+        <h2>Datasets</h2>
+        <fluent-button appearance="accent" @click="openUploadDataset()">+ Upload</fluent-button>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Ref</th><th>Format</th><th>Rows</th><th>Size</th><th></th>
+          </tr></thead>
+          <tbody>
+            <template x-for="d in datasets" :key="d.id">
+              <tr>
+                <td><strong x-text="d.name"></strong></td>
+                <td><code class="mono chip" @click="copy('ds:'+d.id)" :title="'Copy ds:'+d.id"
+                    style="background:var(--surface-2);padding:2px 7px;border-radius:4px">ds:<span
+                    x-text="d.id.slice(0,8)"></span>…</code></td>
+                <td x-text="d.format"></td>
+                <td x-text="d.line_count ?? '—'"></td>
+                <td class="sub" x-text="fmtBytes(d.size_bytes)"></td>
+                <td style="text-align:right">
+                  <button class="linkbtn" @click="previewDataset(d)">Preview</button>
+                  &nbsp;<button class="linkbtn danger" @click="deleteDataset(d)">Delete</button></td>
+              </tr>
+            </template>
+            <tr x-show="datasets.length===0"><td colspan="6" class="empty">
+              No datasets uploaded yet. Click + Upload to add a JSONL / CSV / Parquet file.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ GPUs ══════════════════════════════════════════════════ -->
+    <section x-show="tab==='gpus'">
+      <h2 style="margin-bottom:16px">GPUs</h2>
+      <div class="grid">
+        <template x-for="lease in (gpus.leases||[])" :key="lease.index">
+          <div class="card gpu">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <strong>GPU <span x-text="lease.index"></span></strong>
+              <span class="badge" :class="lease.experiment_id ? 'st-running':'st-completed'"
+                    x-text="lease.experiment_id ? 'busy':'free'"></span>
+            </div>
+            <div class="sub" style="margin-top:6px" x-text="lease.name"></div>
+            <div class="sub" x-text="(lease.memory_total_mb/1024).toFixed(1)+' GB VRAM'"></div>
+            <div class="meter"><i :style="'width:'+(lease.experiment_id?100:0)+'%'"></i></div>
+            <div x-show="lease.experiment_id" class="sub" style="margin-top:10px">Leased to
+              <button class="linkbtn" @click="tab='experiments'; openDetail(lease.experiment_id)"
+                      x-text="(lease.experiment_id||'').slice(0,12)+'…'"></button></div>
+          </div>
+        </template>
+        <div x-show="(gpus.leases||[]).length===0" class="card empty" style="grid-column:1/-1">
+          No GPUs detected (pynvml found no NVIDIA driver). Verify with <code>nvidia-smi</code>.</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══ API key modal ═════════════════════════════════════════ -->
+  <div class="scrim" x-show="apiKeyOpen" @click.self="apiKeyOpen=false">
+    <div class="modal sm">
+      <div class="modal-h"><h3>API key</h3><fluent-button appearance="stealth" @click="apiKeyOpen=false">✕</fluent-button></div>
+      <div class="modal-b">
+        <p class="muted" style="margin:0">Stored in your browser only, sent as <code>X-API-Key</code>.</p>
+        <fluent-text-field type="password" placeholder="X-API-Key"
+          :value="apiKeyDraft" @input="apiKeyDraft=$event.target.value"></fluent-text-field>
+      </div>
+      <div class="modal-f">
+        <fluent-button appearance="outline" @click="apiKeyOpen=false">Cancel</fluent-button>
+        <fluent-button appearance="accent" @click="saveApiKey()">Save</fluent-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Submit experiment modal ═══════════════════════════════ -->
+  <div class="scrim" x-show="submitExpOpen" @click.self="submitExpOpen=false">
+    <div class="modal">
+      <div class="modal-h"><h3>Submit experiment</h3><fluent-button appearance="stealth" @click="submitExpOpen=false">✕</fluent-button></div>
+      <div class="modal-b">
+        <div class="two">
+          <div class="field"><label>name</label>
+            <fluent-text-field :value="expDraft.name" @input="expDraft.name=$event.target.value"></fluent-text-field></div>
+          <div class="field"><label>gpu_count</label>
+            <fluent-number-field min="1" :value="expDraft.gpu_count"
+              @input="expDraft.gpu_count=Number($event.target.value)"></fluent-number-field></div>
+        </div>
+        <div class="field"><label>model</label>
+          <fluent-text-field :value="expDraft.model" @input="expDraft.model=$event.target.value"></fluent-text-field></div>
+        <div class="field"><label>sft_type</label>
+          <fluent-select :value="expDraft.sft_type" @change="expDraft.sft_type=$event.target.value">
+            <fluent-option value="lora">lora</fluent-option>
+            <fluent-option value="full">full</fluent-option>
+            <fluent-option value="qlora">qlora</fluent-option>
+            <fluent-option value="longlora">longlora</fluent-option>
+            <fluent-option value="adalora">adalora</fluent-option>
+            <fluent-option value="ia3">ia3</fluent-option>
+          </fluent-select></div>
+        <div class="field"><label>dataset <span class="hint">(one per line — HF id, /abs/path, or ds:&lt;id&gt;)</span></label>
+          <fluent-text-area rows="3" :value="expDraft.dataset" @input="expDraft.dataset=$event.target.value"
+            placeholder="AI-ModelScope/alpaca-gpt4-data-en#100"></fluent-text-area>
+          <div class="sub" style="margin-top:6px" x-show="datasets.length>0">Available:
+            <template x-for="d in datasets" :key="d.id">
+              <button class="linkbtn" style="margin-right:8px" @click="appendDataset('ds:'+d.id)"
+                x-text="d.name+' (ds:'+d.id.slice(0,6)+'…)'"></button></template></div></div>
+        <div class="field"><label>val_dataset <span class="hint">(optional, one per line)</span></label>
+          <fluent-text-area rows="2" :value="expDraft.val_dataset" @input="expDraft.val_dataset=$event.target.value"></fluent-text-area></div>
+        <div class="field"><label>hyperparameters (JSON)</label>
+          <fluent-text-area rows="6" class="mono" :value="expDraft.hyperparameters"
+            @input="expDraft.hyperparameters=$event.target.value"></fluent-text-area></div>
+        <div class="err" x-show="expError" x-text="expError"></div>
+      </div>
+      <div class="modal-f">
+        <fluent-button appearance="outline" @click="submitExpOpen=false">Cancel</fluent-button>
+        <fluent-button appearance="accent" :disabled="submitting" @click="submitExp()">
+          <fluent-progress-ring slot="start" style="--ring-size:16px" x-show="submitting"></fluent-progress-ring>
+          <span x-text="submitting ? 'Submitting…' : 'Submit'"></span></fluent-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Submit study modal ════════════════════════════════════ -->
+  <div class="scrim" x-show="submitStudyOpen" @click.self="submitStudyOpen=false">
+    <div class="modal">
+      <div class="modal-h"><h3>Start sweep</h3><fluent-button appearance="stealth" @click="submitStudyOpen=false">✕</fluent-button></div>
+      <div class="modal-b">
+        <p class="muted" style="margin:0">Edit a full StudyConfig JSON.</p>
+        <fluent-text-area rows="20" class="mono" :value="studyDraft" @input="studyDraft=$event.target.value"></fluent-text-area>
+        <div class="err" x-show="studyError" x-text="studyError"></div>
+      </div>
+      <div class="modal-f">
+        <fluent-button appearance="outline" @click="submitStudyOpen=false">Cancel</fluent-button>
+        <fluent-button appearance="accent" :disabled="submitting" @click="submitStudy()">Start sweep</fluent-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Upload dataset modal ══════════════════════════════════ -->
+  <div class="scrim" x-show="uploadOpen" @click.self="uploadOpen=false">
+    <div class="modal sm">
+      <div class="modal-h"><h3>Upload dataset</h3><fluent-button appearance="stealth" @click="uploadOpen=false">✕</fluent-button></div>
+      <div class="modal-b">
+        <div class="field"><label>name</label>
+          <fluent-text-field :value="uploadDraft.name" @input="uploadDraft.name=$event.target.value"></fluent-text-field></div>
+        <div class="field"><label>description <span class="hint">(optional)</span></label>
+          <fluent-text-field :value="uploadDraft.description" @input="uploadDraft.description=$event.target.value"></fluent-text-field></div>
+        <div class="field"><label>file <span class="hint">(.jsonl / .json / .csv / .tsv / .parquet)</span></label>
+          <input type="file" @change="uploadDraft.file=$event.target.files[0]" /></div>
+        <div class="err" x-show="uploadError" x-text="uploadError"></div>
+      </div>
+      <div class="modal-f">
+        <fluent-button appearance="outline" @click="uploadOpen=false">Cancel</fluent-button>
+        <fluent-button appearance="accent" :disabled="submitting" @click="submitUpload()">Upload</fluent-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Experiment detail modal ═══════════════════════════════ -->
+  <div class="scrim" x-show="detail" @click.self="closeDetail()">
+    <div class="modal lg">
+      <div class="modal-h">
+        <div><h3 x-text="detail?.spec?.name || '(unnamed)'"></h3>
+          <div class="sub mono" x-text="detail?.id"></div></div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="badge" :class="'st-'+detail?.status" x-text="detail?.status"></span>
+          <button class="linkbtn danger" x-show="detail && (detail.status==='queued'||detail.status==='running')"
+                  @click="cancelExp(detail.id)">Cancel</button>
+          <a class="link" x-show="detail?.mlflow_run_id && mlflowUrl"
+             :href="mlflowUrl+'/#/experiments/'+(detail?.mlflow_experiment_id||0)+'/runs/'+(detail?.mlflow_run_id||'')"
+             target="_blank">MLflow ↗</a>
+          <fluent-button appearance="stealth" @click="closeDetail()">✕</fluent-button>
+        </div>
+      </div>
+      <div class="kv">
+        <div><div class="k">model</div><div class="v mono" x-text="detail?.spec?.model"></div></div>
+        <div><div class="k">sft_type</div><div class="v" x-text="detail?.spec?.sft_type"></div></div>
+        <div><div class="k">gpu_ids</div><div class="v" x-text="(detail?.gpu_ids||[]).join(', ')||'—'"></div></div>
+        <div><div class="k">duration</div><div class="v" x-text="fmtDuration(detail?.started_at, detail?.finished_at)"></div></div>
+        <div style="grid-column:1/-1"><div class="k">dataset</div>
+          <div class="v mono sub">
+            <template x-for="d in (detail?.spec?.dataset||[])" :key="d"><div x-text="d"></div></template></div></div>
+        <div style="grid-column:1/-1" x-show="detail?.error"><div class="k">error</div>
+          <div class="v mono danger" x-text="detail?.error"></div></div>
+      </div>
+      <div class="sub" style="margin:0 22px 6px">log</div>
+      <div class="logpane" x-ref="logPane" x-text="detailLog || '(no log yet)'"></div>
+    </div>
+  </div>
+
+  <div class="toast" x-show="toast" x-text="toast" x-transition.opacity></div>
+
+<script>
+function trainpipe() {
+  return {
+    baseUrl: window.location.origin,
+    tabs: ['experiments','studies','datasets','gpus'],
+    apiKey: localStorage.getItem('trainpipe_api_key') || '',
+    apiKeyDraft: '', apiKeyOpen: false,
+    dark: localStorage.getItem('trainpipe_dark') === '1',
+    mlflowUrl: '', health: 'down',
+    tab: localStorage.getItem('trainpipe_tab') || 'experiments',
+    toast: '', submitting: false, pollTimer: null,
+    detail: null, detailLog: '', detailLogTimer: null,
+
+    experiments: [], studies: [], datasets: [], gpus: { leases: [] },
+
+    submitExpOpen: false,
+    expDraft: { name:'', model:'Qwen/Qwen2.5-0.5B-Instruct', sft_type:'lora', gpu_count:1,
+      dataset:'', val_dataset:'',
+      hyperparameters:'{"num_train_epochs":1,"per_device_train_batch_size":1,"logging_steps":1,"max_length":512,"lora_rank":8}' },
+    expError: '',
+    submitStudyOpen: false, studyDraft: '', studyError: '',
+    uploadOpen: false, uploadDraft: { name:'', description:'', file:null }, uploadError: '',
+
+    async init() {
+      this.$watch('tab', v => localStorage.setItem('trainpipe_tab', v));
+      this.apiKeyDraft = this.apiKey;
+      if (this.dark && window.__fluentTheme) window.__fluentTheme(true);
+      if (new URLSearchParams(location.search).has('demo')) return this.seedDemo();
+      try { this.mlflowUrl = (await (await fetch('/ui/config')).json()).mlflow_tracking_uri; } catch {}
+      await this.refreshAll();
+      this.pollTimer = setInterval(() => this.refreshAll(), 4000);
+    },
+
+    toggleTheme(on) { this.dark = on; localStorage.setItem('trainpipe_dark', on?'1':'0');
+      if (window.__fluentTheme) window.__fluentTheme(on); },
+    saveApiKey() { this.apiKey = this.apiKeyDraft.trim();
+      localStorage.setItem('trainpipe_api_key', this.apiKey); this.apiKeyOpen=false; this.refreshAll(); },
+
+    headers() { return this.apiKey ? { 'X-API-Key': this.apiKey } : {}; },
+    async api(path, opts={}) {
+      const r = await fetch(this.baseUrl+path, { ...opts, headers:{ ...this.headers(), ...(opts.headers||{}) }});
+      if (!r.ok) { let b; try { b = await r.json(); } catch { b = await r.text(); }
+        throw new Error(typeof b==='string'?b:JSON.stringify(b.detail||b)); }
+      const ct = r.headers.get('content-type')||'';
+      return ct.startsWith('application/json') ? r.json() : r.text();
+    },
+    async refreshAll() {
+      try { this.health = (await fetch(this.baseUrl+'/health')).ok ? 'ok':'down'; } catch { this.health='down'; }
+      if (!this.apiKey) return;
+      await Promise.all([
+        this.api('/experiments?limit=100').then(r=>this.experiments=r).catch(()=>{}),
+        this.api('/studies').then(r=>this.studies=r).catch(()=>{}),
+        this.api('/datasets').then(r=>this.datasets=r).catch(()=>{}),
+        this.api('/gpus').then(r=>this.gpus=r).catch(()=>{}),
+      ]);
+    },
+
+    openSubmitExp() { this.expError=''; this.submitExpOpen=true; },
+    appendDataset(ref) { const l = this.expDraft.dataset.split('\n').filter(Boolean); l.push(ref);
+      this.expDraft.dataset = l.join('\n'); },
+    async submitExp() {
+      this.expError=''; let hp;
+      try { hp = JSON.parse(this.expDraft.hyperparameters); }
+      catch(e) { this.expError='hyperparameters: invalid JSON — '+e.message; return; }
+      const spec = { name:this.expDraft.name||null, model:this.expDraft.model, sft_type:this.expDraft.sft_type,
+        dataset:this.expDraft.dataset.split('\n').map(s=>s.trim()).filter(Boolean),
+        val_dataset:this.expDraft.val_dataset.split('\n').map(s=>s.trim()).filter(Boolean),
+        gpu_count:this.expDraft.gpu_count, hyperparameters:hp };
+      this.submitting=true;
+      try { const r = await this.api('/experiments',{ method:'POST',
+          headers:{'Content-Type':'application/json'}, body:JSON.stringify(spec) });
+        this.submitExpOpen=false; this.flash(`Submitted ${r.experiment_id.slice(0,8)}…`); this.refreshAll();
+      } catch(e) { this.expError=e.message; } finally { this.submitting=false; }
+    },
+    async cancelExp(id) { try { await this.api(`/experiments/${id}/cancel`,{method:'POST'});
+      this.flash('Cancelled'); if (this.detail?.id===id) this.openDetail(id); this.refreshAll();
+    } catch(e) { this.flash('Cancel failed: '+e.message); } },
+
+    async openDetail(id) { this.detail = await this.api(`/experiments/${id}`).catch(()=>null);
+      this.detailLog=''; this.startLogPoll(); },
+    closeDetail() { this.detail=null; this.stopLogPoll(); },
+    startLogPoll() { this.stopLogPoll();
+      const f = async () => { if (!this.detail) return;
+        try { const t = await this.api(`/experiments/${this.detail.id}/logs`);
+          this.detailLog = typeof t==='string'?t:JSON.stringify(t);
+          this.$nextTick(()=>{ const p=this.$refs.logPane; if(p) p.scrollTop=p.scrollHeight; });
+          this.detail = await this.api(`/experiments/${this.detail.id}`);
+        } catch {} };
+      f(); this.detailLogTimer = setInterval(f, 2500); },
+    stopLogPoll() { if (this.detailLogTimer) { clearInterval(this.detailLogTimer); this.detailLogTimer=null; } },
+
+    openSubmitStudy() { this.studyError='';
+      this.studyDraft = JSON.stringify({ name:'sweep-'+new Date().toISOString().slice(0,10),
+        base_spec:{ model:this.expDraft.model, dataset:['AI-ModelScope/alpaca-gpt4-data-en#100'], sft_type:'lora' },
+        search_space:{ 'hyperparameters.learning_rate':{kind:'loguniform',low:1e-5,high:1e-3},
+          'hyperparameters.lora_rank':{kind:'categorical',choices:[4,8,16]} },
+        target_metric:'eval/loss', direction:'minimize', n_trials:8, max_concurrent:1, sampler:'tpe' }, null, 2);
+      this.submitStudyOpen=true; },
+    async submitStudy() { this.studyError=''; let c;
+      try { c = JSON.parse(this.studyDraft); } catch(e) { this.studyError='invalid JSON — '+e.message; return; }
+      this.submitting=true;
+      try { const r = await this.api('/studies',{ method:'POST',
+          headers:{'Content-Type':'application/json'}, body:JSON.stringify(c) });
+        this.submitStudyOpen=false; this.flash(`Study ${r.study_id.slice(0,8)}… started`); this.refreshAll();
+      } catch(e) { this.studyError=e.message; } finally { this.submitting=false; } },
+    async cancelStudy(id) { try { await this.api(`/studies/${id}/cancel`,{method:'POST'});
+      this.flash('Study cancelled'); this.refreshAll(); } catch(e) { this.flash('Cancel failed: '+e.message); } },
+
+    openUploadDataset() { this.uploadDraft={name:'',description:'',file:null}; this.uploadError=''; this.uploadOpen=true; },
+    async submitUpload() {
+      if (!this.uploadDraft.file) { this.uploadError='pick a file'; return; }
+      if (!this.uploadDraft.name) { this.uploadError='name required'; return; }
+      const fd = new FormData(); fd.append('file', this.uploadDraft.file); fd.append('name', this.uploadDraft.name);
+      if (this.uploadDraft.description) fd.append('description', this.uploadDraft.description);
+      this.submitting=true;
+      try { const r = await fetch(this.baseUrl+'/datasets',{ method:'POST', headers:this.headers(), body:fd });
+        if (!r.ok) { const b = await r.json().catch(()=>({})); throw new Error(JSON.stringify(b.detail||b)); }
+        this.uploadOpen=false; this.flash('Uploaded '+this.uploadDraft.name); this.refreshAll();
+      } catch(e) { this.uploadError=e.message; } finally { this.submitting=false; } },
+    async previewDataset(d) { try { alert(await this.api(`/datasets/${d.id}/preview?n=20`)); }
+      catch(e) { this.flash('Preview failed: '+e.message); } },
+    async deleteDataset(d) { if (!confirm(`Delete dataset "${d.name}"? Files will be removed from disk.`)) return;
+      try { await this.api(`/datasets/${d.id}`,{method:'DELETE'}); this.flash('Deleted'); this.refreshAll(); }
+      catch(e) { this.flash('Delete failed: '+e.message); } },
+
+    cap(s) { return s.charAt(0).toUpperCase()+s.slice(1); },
+    fmtTime(iso) { if (!iso) return ''; const d=new Date(iso), n=new Date();
+      return d.toDateString()===n.toDateString() ? d.toLocaleTimeString() : d.toLocaleString(); },
+    fmtDuration(a,b) { if (!a) return '—'; const s=Math.floor(((b?new Date(b):new Date())-new Date(a))/1000);
+      if (s<60) return s+'s'; if (s<3600) return `${Math.floor(s/60)}m ${s%60}s`;
+      return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`; },
+    fmtBytes(n) { if (n==null) return '—'; if (n<1024) return n+' B';
+      if (n<1048576) return (n/1024).toFixed(1)+' KB'; if (n<1073741824) return (n/1048576).toFixed(1)+' MB';
+      return (n/1073741824).toFixed(2)+' GB'; },
+    copy(t) { navigator.clipboard.writeText(t); this.flash('Copied '+t); },
+    flash(m) { this.toast=m; setTimeout(()=>{ if (this.toast===m) this.toast=''; }, 2500); },
+
+    // ── demo seed (open with ?demo=1, no backend needed) ────────
+    seedDemo() {
+      this.health='ok'; this.mlflowUrl='http://localhost:5000';
+      const now = Date.now();
+      this.experiments = [
+        { id:'a1b2c3d4e5f6', status:'running', gpu_ids:[0,1], created_at:new Date(now-3600e3).toISOString(),
+          started_at:new Date(now-3500e3).toISOString(), mlflow_run_id:'r1', mlflow_experiment_id:2,
+          spec:{ name:'qwen-alpaca-lora', model:'Qwen/Qwen2.5-7B-Instruct', sft_type:'lora',
+            dataset:['AI-ModelScope/alpaca-gpt4-data-en#5000'] } },
+        { id:'b2c3d4e5f6a1', status:'completed', gpu_ids:[2], created_at:new Date(now-9e6).toISOString(),
+          spec:{ name:'llama-summarize', model:'meta-llama/Llama-3.1-8B', sft_type:'qlora', dataset:['ds:9f3a1c']} },
+        { id:'c3d4e5f6a1b2', status:'queued', gpu_ids:[], created_at:new Date(now-120e3).toISOString(),
+          spec:{ name:'', model:'Qwen/Qwen2.5-0.5B-Instruct', sft_type:'lora', dataset:['ds:9f3a1c']} },
+        { id:'d4e5f6a1b2c3', status:'failed', gpu_ids:[3], created_at:new Date(now-2.6e8).toISOString(),
+          error:'CUDA out of memory', spec:{ name:'big-run', model:'Qwen/Qwen2.5-32B', sft_type:'full',
+            dataset:['my/dataset'] } },
+      ];
+      this.studies = [
+        { id:'5e7a9b1c', name:'lr-sweep-2026-05', status:'active', n_trials_completed:5, n_trials_target:8,
+          best_value:0.8421, created_at:new Date(now-7200e3).toISOString() },
+        { id:'7f1d3e5a', name:'rank-search', status:'completed', n_trials_completed:12, n_trials_target:12,
+          best_value:0.7993, created_at:new Date(now-1.7e8).toISOString() },
+      ];
+      this.datasets = [
+        { id:'9f3a1c4d8e2b', name:'alpaca-gpt4-en', format:'jsonl', line_count:52002, size_bytes:43210000 },
+        { id:'2b7e1f9c3a4d', name:'support-tickets', format:'csv', line_count:8400, size_bytes:5120000 },
+      ];
+      this.gpus = { leases: [
+        { index:0, name:'NVIDIA A100 80GB', memory_total_mb:81920, experiment_id:'a1b2c3d4e5f6', leased_at:new Date(now-3500e3).toISOString() },
+        { index:1, name:'NVIDIA A100 80GB', memory_total_mb:81920, experiment_id:'a1b2c3d4e5f6', leased_at:new Date(now-3500e3).toISOString() },
+        { index:2, name:'NVIDIA A100 80GB', memory_total_mb:81920, experiment_id:null },
+        { index:3, name:'NVIDIA A100 80GB', memory_total_mb:81920, experiment_id:null },
+      ]};
+    },
+  };
+}
+</script>
+</body>
+</html>
