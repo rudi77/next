@@ -316,14 +316,29 @@
                 <td class="px-3 py-2 text-slate-600 hidden md:table-cell" x-text="d.line_count ?? '—'"></td>
                 <td class="px-3 py-2 text-slate-600 text-xs hidden md:table-cell" x-text="fmtBytes(d.size_bytes)"></td>
                 <td class="px-3 py-2 text-right whitespace-nowrap">
-                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline text-xs px-1.5 py-1">Preview</button>
-                  <button @click="openSplit(d)" class="text-emerald-700 hover:underline text-xs px-1.5 py-1"
-                          title="Deterministic train/val split">Split</button>
-                  <button @click="openRedact(d)" class="text-amber-700 hover:underline text-xs px-1.5 py-1"
-                          title="Remove PII and register as new dataset">Redact</button>
-                  <button @click="openLineage(d)" class="text-slate-700 hover:underline text-xs px-1.5 py-1"
-                          title="Models that trained on this dataset">Lineage</button>
-                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline text-xs px-1.5 py-1">Delete</button>
+                  <button @click="previewDataset(d)" class="text-cyan-700 hover:underline px-1.5 py-1" title="Preview">
+                    <span class="hidden sm:inline text-xs">Preview</span>
+                    <span class="sm:hidden text-base">👁</span>
+                  </button>
+                  <button @click="openSplit(d)" class="text-emerald-700 hover:underline px-1.5 py-1"
+                          title="Deterministic train/val split">
+                    <span class="hidden sm:inline text-xs">Split</span>
+                    <span class="sm:hidden text-base">✂</span>
+                  </button>
+                  <button @click="openRedact(d)" class="text-amber-700 hover:underline px-1.5 py-1"
+                          title="Remove PII and register as new dataset">
+                    <span class="hidden sm:inline text-xs">Redact</span>
+                    <span class="sm:hidden text-base">⊘</span>
+                  </button>
+                  <button @click="openLineage(d)" class="text-slate-700 hover:underline px-1.5 py-1"
+                          title="Models that trained on this dataset">
+                    <span class="hidden sm:inline text-xs">Lineage</span>
+                    <span class="sm:hidden text-base">🔗</span>
+                  </button>
+                  <button @click="deleteDataset(d)" class="text-rose-600 hover:underline px-1.5 py-1" title="Delete">
+                    <span class="hidden sm:inline text-xs">Delete</span>
+                    <span class="sm:hidden text-base">🗑</span>
+                  </button>
                 </td>
               </tr>
             </template>
@@ -452,6 +467,10 @@
         <div x-show="forgetError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
              x-text="forgetError"></div>
         <div class="flex justify-end gap-2">
+          <button x-show="forgetReport" @click="forgetReport = null"
+                  class="px-4 py-2 text-sm border border-slate-300 text-slate-700 rounded hover:bg-slate-50">
+            Clear
+          </button>
           <button @click="runForgetScan()" :disabled="forgetRunning || !forgetDraft.term"
                   class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
             <span x-show="!forgetRunning">Scan</span>
@@ -504,12 +523,9 @@
 
             <div x-show="forgetReport.skipped_datasets?.length > 0">
               <div class="text-xs text-amber-700 mb-1">Skipped datasets</div>
-              <ul class="text-xs text-slate-500">
-                <template x-for="s in forgetReport.skipped_datasets" :key="s.dataset_id || s.path">
-                  <li>
-                    <span x-text="s.dataset_name || s.dataset_id || s.path"></span>:
-                    <span x-text="s.reason"></span>
-                  </li>
+              <ul class="text-xs text-slate-500 font-mono">
+                <template x-for="(s, i) in forgetReport.skipped_datasets" :key="i">
+                  <li x-text="s"></li>
                 </template>
               </ul>
             </div>
@@ -1511,10 +1527,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="alPushOpen = false" class="px-4 py-2 text-sm">Close</button>
-        <button @click="submitAlPush()" :disabled="submitting"
+        <button @click="submitAlPush()" :disabled="alPushSubmitting"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Push</span>
-          <span x-show="submitting">Pushing…</span>
+          <span x-show="!alPushSubmitting">Push</span>
+          <span x-show="alPushSubmitting">Pushing…</span>
         </button>
       </div>
     </div>
@@ -1642,10 +1658,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="bundleOpen = false" class="px-4 py-2 text-sm">Cancel</button>
-        <button @click="submitBundle()" :disabled="submitting"
+        <button @click="submitBundle()" :disabled="bundleSubmitting"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Upload</span>
-          <span x-show="submitting">Uploading…</span>
+          <span x-show="!bundleSubmitting">Upload</span>
+          <span x-show="bundleSubmitting">Uploading…</span>
         </button>
       </div>
     </div>
@@ -1689,10 +1705,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="splitOpen = false" class="px-4 py-2 text-sm">Cancel</button>
-        <button @click="submitSplit()" :disabled="submitting"
+        <button @click="submitSplit()" :disabled="splitSubmitting"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Split</span>
-          <span x-show="submitting">Splitting…</span>
+          <span x-show="!splitSubmitting">Split</span>
+          <span x-show="splitSubmitting">Splitting…</span>
         </button>
       </div>
     </div>
@@ -1731,10 +1747,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="redactOpen = false" class="px-4 py-2 text-sm">Cancel</button>
-        <button @click="submitRedact()" :disabled="submitting || redactDraft.entities.length === 0"
+        <button @click="submitRedact()" :disabled="redactSubmitting || redactDraft.entities.length === 0"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Redact</span>
-          <span x-show="submitting">Redacting…</span>
+          <span x-show="!redactSubmitting">Redact</span>
+          <span x-show="redactSubmitting">Redacting…</span>
         </button>
       </div>
     </div>
@@ -1800,10 +1816,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="mixOpen = false" class="px-4 py-2 text-sm">Cancel</button>
-        <button @click="submitMix()" :disabled="submitting"
+        <button @click="submitMix()" :disabled="mixSubmitting"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Mix</span>
-          <span x-show="submitting">Mixing…</span>
+          <span x-show="!mixSubmitting">Mix</span>
+          <span x-show="mixSubmitting">Mixing…</span>
         </button>
       </div>
     </div>
@@ -1819,8 +1835,9 @@
       </div>
       <div class="p-4 sm:p-5 space-y-3 text-sm">
         <p class="text-xs text-slate-600">
-          Atomic: either all specs queue, or none do. The body must be a JSON
-          object with a <code>specs</code> array of ExperimentSpec objects.
+          Validates every spec before queueing; on the first invalid spec the
+          whole batch is rejected. Body is a plain JSON <strong>array</strong> of
+          ExperimentSpec objects.
         </p>
         <textarea x-model="batchDraft" rows="20"
                   class="w-full border rounded px-2 py-2 text-xs font-mono"></textarea>
@@ -1829,10 +1846,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="batchOpen = false" class="px-4 py-2 text-sm">Cancel</button>
-        <button @click="submitBatch()" :disabled="submitting"
+        <button @click="submitBatch()" :disabled="batchSubmitting"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Submit batch</span>
-          <span x-show="submitting">Submitting…</span>
+          <span x-show="!batchSubmitting">Submit batch</span>
+          <span x-show="batchSubmitting">Submitting…</span>
         </button>
       </div>
     </div>
@@ -1912,10 +1929,10 @@
       </div>
       <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
         <button @click="watchOpen = false" class="px-4 py-2 text-sm">Cancel</button>
-        <button @click="submitWatch()" :disabled="submitting"
+        <button @click="submitWatch()" :disabled="watchSubmitting"
                 class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
-          <span x-show="!submitting">Create</span>
-          <span x-show="submitting">Creating…</span>
+          <span x-show="!watchSubmitting">Create</span>
+          <span x-show="watchSubmitting">Creating…</span>
         </button>
       </div>
     </div>
@@ -2339,21 +2356,27 @@ function trainpipe() {
     lsError: '',
 
     // Phase A: dataset-gap modals (split, redact, bundle, mix, lineage)
+    // Each modal gets its own *Submitting flag so stacked or parallel
+    // modals don't disable each other's buttons.
     splitOpen: false,
     splitDraft: { dataset_id: '', source_name: '', ratio: '90:10', seed: 0, train_name: '', val_name: '' },
     splitError: '',
+    splitSubmitting: false,
 
     redactOpen: false,
-    redactDraft: { dataset_id: '', source_name: '', entities: ['email','phone','iban','credit_card'], name: '' },
+    redactDraft: { dataset_id: '', source_name: '', entities: ['email','phone','iban','credit_card','de_tax_id'], name: '' },
     redactError: '',
+    redactSubmitting: false,
 
     bundleOpen: false,
     bundleDraft: { name: '', description: '', file: null },
     bundleError: '',
+    bundleSubmitting: false,
 
     mixOpen: false,
     mixDraft: { name: '', sources: [{dataset_id:'',weight:1.0},{dataset_id:'',weight:1.0}], target_count: null, seed: 0 },
     mixError: '',
+    mixSubmitting: false,
 
     lineageOpen: false,
     lineageDraft: { dataset_id: '', source_name: '', recursive: false, model_ids: [] },
@@ -2380,12 +2403,18 @@ function trainpipe() {
       model_name: '', pipeline_config: '',
     },
     watchError: '',
+    watchSubmitting: false,
 
-    // Phase E: AL → Label Studio push
+    // Phase E: AL → Label Studio push (stacked over the AL queue modal,
+    // so it MUST have its own submitting flag).
     alPushOpen: false,
     alPushDraft: { base_url: '', token: '', project_id: 1 },
     alPushError: '',
     alPushResult: '',
+    alPushSubmitting: false,
+
+    // Phase F: batch submit
+    batchSubmitting: false,
 
     // ── lifecycle ──────────────────────────────────────────────
     async init() {
@@ -3111,7 +3140,7 @@ function trainpipe() {
         payload.metric_name = this.watchDraft.metric_name;
         payload.threshold = this.watchDraft.threshold;
       }
-      this.submitting = true;
+      this.watchSubmitting = true;
       try {
         await this.api('/watches', {
           method: 'POST',
@@ -3124,7 +3153,7 @@ function trainpipe() {
       } catch (e) {
         this.watchError = e.message;
       } finally {
-        this.submitting = false;
+        this.watchSubmitting = false;
       }
     },
 
@@ -3259,7 +3288,7 @@ function trainpipe() {
       if (!this.alQueueRunId) {
         this.alPushError = 'no run selected — open a queue first'; return;
       }
-      this.submitting = true;
+      this.alPushSubmitting = true;
       try {
         const r = await this.api(`/active-learning/runs/${this.alQueueRunId}/push-labelstudio`, {
           method: 'POST',
@@ -3275,7 +3304,7 @@ function trainpipe() {
       } catch (e) {
         this.alPushError = e.message;
       } finally {
-        this.submitting = false;
+        this.alPushSubmitting = false;
       }
     },
 
@@ -3329,7 +3358,7 @@ function trainpipe() {
     },
     async submitSplit() {
       this.splitError = '';
-      this.submitting = true;
+      this.splitSubmitting = true;
       try {
         await this.api(`/datasets/${this.splitDraft.dataset_id}/split`, {
           method: 'POST',
@@ -3347,17 +3376,19 @@ function trainpipe() {
       } catch (e) {
         this.splitError = e.message;
       } finally {
-        this.submitting = false;
+        this.splitSubmitting = false;
       }
     },
 
     // ── dataset: redact ────────────────────────────────────────
     openRedact(d) {
       this.redactError = '';
+      // Default to all 5 entity types — safest for compliance; user can
+      // uncheck what they don't want before submitting.
       this.redactDraft = {
         dataset_id: d.id,
         source_name: d.name,
-        entities: ['email', 'phone', 'iban', 'credit_card'],
+        entities: ['email', 'phone', 'iban', 'credit_card', 'de_tax_id'],
         name: '',
       };
       this.redactOpen = true;
@@ -3368,7 +3399,7 @@ function trainpipe() {
         this.redactError = 'Pick at least one entity type';
         return;
       }
-      this.submitting = true;
+      this.redactSubmitting = true;
       try {
         const payload = { entities: this.redactDraft.entities };
         if (this.redactDraft.name) payload.name = this.redactDraft.name;
@@ -3383,7 +3414,7 @@ function trainpipe() {
       } catch (e) {
         this.redactError = e.message;
       } finally {
-        this.submitting = false;
+        this.redactSubmitting = false;
       }
     },
 
@@ -3401,7 +3432,7 @@ function trainpipe() {
       form.append('file', this.bundleDraft.file);
       form.append('name', this.bundleDraft.name);
       if (this.bundleDraft.description) form.append('description', this.bundleDraft.description);
-      this.submitting = true;
+      this.bundleSubmitting = true;
       try {
         const resp = await fetch(this.baseUrl + '/datasets/bundle', {
           method: 'POST', headers: this.headers(), body: form,
@@ -3417,7 +3448,7 @@ function trainpipe() {
       } catch (e) {
         this.bundleError = e.message;
       } finally {
-        this.submitting = false;
+        this.bundleSubmitting = false;
       }
     },
 
@@ -3443,7 +3474,7 @@ function trainpipe() {
       }
       const payload = { name: this.mixDraft.name, sources, seed: this.mixDraft.seed };
       if (this.mixDraft.target_count) payload.target_count = this.mixDraft.target_count;
-      this.submitting = true;
+      this.mixSubmitting = true;
       try {
         await this.api('/datasets/mixes', {
           method: 'POST',
@@ -3456,7 +3487,7 @@ function trainpipe() {
       } catch (e) {
         this.mixError = e.message;
       } finally {
-        this.submitting = false;
+        this.mixSubmitting = false;
       }
     },
 
@@ -3532,6 +3563,9 @@ function trainpipe() {
             case_sensitive: this.forgetDraft.case_sensitive,
           }),
         });
+        const nHits = this.forgetReport.hits?.length || 0;
+        const nModels = this.forgetReport.impacted_models?.length || 0;
+        this.flash(`Scan complete — ${nHits} dataset hit${nHits === 1 ? '' : 's'}, ${nModels} impacted model${nModels === 1 ? '' : 's'}`);
       } catch (e) {
         this.forgetError = e.message;
       } finally {
@@ -3584,11 +3618,20 @@ function trainpipe() {
               const raw = buf.slice(0, idx);
               buf = buf.slice(idx + 2);
               const lines = raw.split('\n');
-              let ev = 'message', data = '';
+              let ev = 'message';
+              const dataParts = [];
               for (const l of lines) {
-                if (l.startsWith('event:')) ev = l.slice(6).trim();
-                else if (l.startsWith('data:')) data += l.slice(5).trimStart();
+                if (l.startsWith('event:')) {
+                  ev = l.slice(6).trim();
+                } else if (l.startsWith('data:')) {
+                  // SSE spec: strip at most one leading space; multiple
+                  // data: lines in one event are joined with \n.
+                  let s = l.slice(5);
+                  if (s.startsWith(' ')) s = s.slice(1);
+                  dataParts.push(s);
+                }
               }
+              const data = dataParts.join('\n');
               if (ev === 'token') {
                 this.playground.results[0].prediction += data;
               } else if (ev === 'error') {
@@ -3626,43 +3669,41 @@ function trainpipe() {
     // ── experiments: batch submit ──────────────────────────────
     openBatchSubmit() {
       this.batchError = '';
-      this.batchDraft = JSON.stringify({
-        specs: [
-          {
-            name: 'exp-1',
-            model: this.expDraft.model,
-            sft_type: 'lora',
-            dataset: ['AI-ModelScope/alpaca-gpt4-data-en#100'],
-            hyperparameters: { num_train_epochs: 1, lora_rank: 8 },
-          },
-        ],
-      }, null, 2);
+      this.batchDraft = JSON.stringify([
+        {
+          name: 'exp-1',
+          model: this.expDraft.model,
+          sft_type: 'lora',
+          dataset: ['AI-ModelScope/alpaca-gpt4-data-en#100'],
+          hyperparameters: { num_train_epochs: 1, lora_rank: 8 },
+        },
+      ], null, 2);
       this.batchOpen = true;
     },
     async submitBatch() {
       this.batchError = '';
-      let body;
-      try { body = JSON.parse(this.batchDraft); }
+      let specs;
+      try { specs = JSON.parse(this.batchDraft); }
       catch (e) { this.batchError = 'invalid JSON — ' + e.message; return; }
-      if (!body.specs || !Array.isArray(body.specs) || body.specs.length === 0) {
-        this.batchError = 'body must include a non-empty "specs" array';
+      if (!Array.isArray(specs) || specs.length === 0) {
+        this.batchError = 'body must be a non-empty JSON array of ExperimentSpec objects';
         return;
       }
-      this.submitting = true;
+      this.batchSubmitting = true;
       try {
         const r = await this.api('/experiments/batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(specs),
         });
         this.batchOpen = false;
-        const n = r.experiment_ids ? r.experiment_ids.length : body.specs.length;
+        const n = r.experiment_ids ? r.experiment_ids.length : specs.length;
         this.flash(`Batch queued (${n} experiments)`);
         this.refreshAll();
       } catch (e) {
         this.batchError = e.message;
       } finally {
-        this.submitting = false;
+        this.batchSubmitting = false;
       }
     },
 

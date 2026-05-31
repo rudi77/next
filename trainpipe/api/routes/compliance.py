@@ -16,6 +16,9 @@ router = APIRouter(
 
 
 class ForgetScanRequest(BaseModel):
+    # Defaults intentionally mirror ``scan_datasets_for_term``'s kwargs so the
+    # REST contract matches the CLI / MCP shapes. Keep both in sync when
+    # changing either.
     term: str = Field(min_length=1)
     is_regex: bool = False
     case_sensitive: bool = False
