@@ -485,7 +485,7 @@ MCP server process; the agent only sees tool calls and their results.
 ## Configuration
 
 All settings are prefixed `TRAINPIPE_` and loaded from `.env` or the
-environment.
+environment
 
 | Var                          | Default                  | Notes                                  |
 | ---------------------------- | ------------------------ | -------------------------------------- |
