@@ -40,6 +40,17 @@ async def test_expected_tools_are_registered():
         "get_dataset",
         "preview_dataset",
         "delete_dataset",
+        # Model registry (Phase 7) — the spec lists these as registered tools.
+        "register_model",
+        "list_models",
+        "get_model",
+        "set_alias",
+        "delete_model",
+        # Inference playground (Phase 8) + synth (Phase 14) + compliance (Phase 15).
+        "inference",
+        "inference_compare",
+        "synth_dataset",
+        "forget_scan",
     }
     missing = expected - names
     assert not missing, f"missing tools: {missing}"

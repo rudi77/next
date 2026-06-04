@@ -1,15 +1,13 @@
 ---
 feature: multi-stage-pipelines
-status: planned
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-12
 ---
 
 # Multi-Stage-Pipelines — CPT → SFT → DPO als ein Objekt
-
-**Geplant (ROADMAP Phase 12) — noch nicht implementiert.**
 
 Ein Domain-LLM-Workflow als ein deklariertes Objekt: continued pretraining →
 instruction tuning → preference alignment. Jede Stage übernimmt den Checkpoint
@@ -32,15 +30,17 @@ der vorigen, der finale Checkpoint wird registriert.
 - Cancel einer Pipeline kaskadiert auf alle noch nicht terminalen Stages
 - Der finale Checkpoint wird in der Modell-Registry registriert
 
-## API surface (geplant — der angestrebte Vertrag)
+## API surface (der Vertrag für Clients)
 
-- POST /pipelines (3-Stage-DAG) → startet die Pipeline
-- GET /pipelines · GET /pipelines/{id}
-- POST /pipelines/{id}/cancel → kaskadiert auf alle Stages
+- POST /pipelines → 201 (DAG aus 1–16 Stages) · 422 (Duplikat-Stage-Name,
+  dangling `depends_on`/`input_from_stage`, Zyklus)
+- GET /pipelines → 200 · GET /pipelines/{id} → 200 · 404
+- POST /pipelines/{id}/cancel → 200 (kaskadiert auf alle noch nicht terminalen Stages)
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
-- Schema: Migration v5 (`pipelines`, `pipeline_stages`); `PipelineConfig(stages: list[StageSpec])`
+- `PipelineConfig(stages: list[StageSpec])`; persistiert in eigenen `pipelines`/
+  `pipeline_stages`-Tabellen (Migration in `core/db.py`)
 
 ## Extension points (für Plugins / externe Nutzung)
 
@@ -48,14 +48,13 @@ der vorigen, der finale Checkpoint wird registriert.
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) Stage N startet erst nach Completion von Stage N-1
-- (geplant) Adapter-Pfad-Propagation + Cancel-Kaskade + Crash-Resume
+- `tests/test_phase12_pipelines.py` — DAG-Validierung (Duplikate, dangling edges,
+  Zyklus, linearer DAG), atomares Stage-Enqueue + Rollback, Create-/Get-Routen
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: keine Migration v5, kein Pipeline-Driver,
-  keine Routen, kein UI-Tab.
-- Die DPO-Stage setzt [preference-training](preference-training.md) (Phase 13) voraus.
+- Die DPO-Stage setzt [preference-training](preference-training.md) (Phase 13) voraus
+  (vorhanden).
 
 ## Cross-references
 

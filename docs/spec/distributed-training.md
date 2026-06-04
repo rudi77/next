@@ -1,15 +1,19 @@
 ---
 feature: distributed-training
-status: planned
+status: partial
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-18
 ---
 
 # Distributed Training — Multi-Host (DeepSpeed/FSDP)
 
-**Geplant (ROADMAP Phase 18) — noch nicht implementiert.**
+**Teilweise implementiert (ROADMAP Phase 18).** Single-Host ZeRO ist verdrahtet:
+`DistributedConfig` ist Teil der Spec, `swift_builder` emittiert das DeepSpeed-Flag
+und surfaced die Multi-Node-Koordination als Env-Variablen. Die eigentliche
+Multi-Host-Orchestrierung (SSH-Spawn pro Host, echtes `torchrun`-argv, Lease-
+Accounting über mehrere Hosts) liegt heute auf Operator-Ebene und ist noch nicht gebaut.
 
 Wenn ein Single-Host nicht mehr reicht (13B+ full FT oder mehr Throughput),
 wird verteiltes Training konfigurierbar. Ziel: eine ExperimentSpec kann
@@ -18,14 +22,17 @@ mehrere Hosts.
 
 ## Capabilities (was der Nutzer tun kann)
 
-- Eine verteilte Konfiguration an einem Experiment setzen (ZeRO-Stage, Knotenzahl, Host-Liste/SSH)
-- Einen Multi-Host-Lauf starten, der über mehrere Knoten skaliert
+- Eine verteilte Konfiguration an einem Experiment setzen (ZeRO-Stage, Knotenzahl, Host-Liste, Master-Addr) — **vorhanden**
+- Single-Host-ZeRO (Stage 1/2/3) fahren — **vorhanden**
+- Einen Multi-Host-Lauf starten, der über mehrere Knoten skaliert — **Operator-Ebene/geplant**
 
 ## Invariants (was immer gelten muss)
 
-- `deepspeed_zero_stage` ist Teil der Spec und wird an ms-swift durchgereicht
-- `swift_builder` erzeugt `torchrun` mit `--nproc_per_node` + `--nnodes`
-- Der Scheduler unterstützt einen Multi-Host-GPU-Pool (Leases über mehrere Hosts)
+- `deepspeed_zero_stage` (1/2/3) ist Teil der Spec; `swift_builder` emittiert
+  `--deepspeed_zero<N>` (Stage 0 = aus, emittiert nichts) — **vorhanden**
+- Multi-Node-Intent (`num_nodes` > 1) wird als Env durchgereicht — `NNODES`,
+  `MASTER_ADDR`, `MASTER_PORT`, `TRAINPIPE_HOST_LIST` — damit der Launcher des
+  Betreibers (torchrun/accelerate/SSH-Spawn) sie liest — **vorhanden**
 - Public-Feldnamen bleiben stabil; das Flag-Mapping bleibt im swift_builder isoliert
 
 ## API surface (der Vertrag für Clients)
@@ -34,22 +41,25 @@ mehrere Hosts.
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
-- `ExperimentSpec.distributed: DistributedConfig` (zero_stage, num_nodes, host_list / SSH)
+- `ExperimentSpec.distributed: DistributedConfig` (`deepspeed_zero_stage`,
+  `num_nodes`, `host_list`, `master_addr`, `master_port`)
 
 ## Extension points (für Plugins / externe Nutzung)
 
-- `training/swift_builder.py` — `torchrun`-Generierung für Multi-Node
+- `training/swift_builder.py` — DeepSpeed-Flag + Multi-Node-Env (Touchpoint für eine
+  spätere echte `torchrun`-argv-Generierung)
 - GPU-Pool — Multi-Host-Lease-Accounting (Erweiterung der heutigen Single-Host-Logik)
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) swift_builder erzeugt korrektes `torchrun --nproc_per_node --nnodes`
-- (geplant) Multi-Host-Lease-Allokation
+- `tests/test_phase18_distributed.py` — `--deepspeed_zero<N>` für Stage 1/2/3
+  (nichts bei Stage 0), Multi-Node-Env-Variablen (NNODES/MASTER_ADDR/…)
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: kein `distributed`-Feld, keine torchrun-
-  Generierung, kein Multi-Host-Pool.
+- Kein echtes `torchrun --nproc_per_node --nnodes`-argv und kein Multi-Host-GPU-Pool:
+  Multi-Node ist heute als Env-Intent für den Operator-Launcher umgesetzt, nicht als
+  von trainpipe selbst gefahrene Orchestrierung.
 - Kubernetes-Backend ist bewusst out of scope.
 
 ## Cross-references

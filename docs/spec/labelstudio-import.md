@@ -1,15 +1,13 @@
 ---
 feature: labelstudio-import
-status: planned
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-10
 ---
 
 # Annotation-Bridge — Direkter Import aus Label Studio
-
-**Geplant (ROADMAP Phase 10) — noch nicht implementiert.**
 
 Label Studio existiert und ist gut; trainpipe baut keine eigene Annotations-UI,
 sondern nur einen Import-Adapter. Ziel: ein Label-Studio-Projekt direkt holen,
@@ -32,9 +30,11 @@ seine Exports auf das passende JSONL-Format mappen und als Dataset registrieren
   Format-Validierung gelten)
 - Inkrementeller Import zieht nur Annotationen, die seit der letzten Marke neu sind
 
-## API surface (geplant — der angestrebte Vertrag)
+## API surface (der Vertrag für Clients)
 
-- POST /datasets/from-labelstudio?project_id=…&token=… → registriert das Projekt als Dataset
+- POST /datasets/from-labelstudio → 201 (registriert das Projekt als Dataset; Body
+  mit `base_url`/`project_id`/`token`, optional `since_iso` für inkrementellen Import)
+  · 422 (`no_records` — leeres Projekt/Filter ohne Treffer) · 502 (`labelstudio_error`)
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
@@ -46,12 +46,13 @@ seine Exports auf das passende JSONL-Format mappen und als Dataset registrieren
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) Mapping je Annotations-Typ auf das erwartete JSONL
-- (geplant) Inkrementeller Import zieht nur Neues
+- `tests/test_phase10_labelstudio.py` — Mapping je Annotations-Typ auf das
+  erwartete JSONL, SSRF-Abwehr beim LS-Client, Import-Route registriert ein Dataset
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: kein LS-Client, kein Mapper, keine Route, kein UI-Eintrag.
+- Inkrementeller Import filtert server-seitig über `completed_at__gte` (`since_iso`);
+  die „letzte Marke" muss der Aufrufer halten — trainpipe persistiert keinen Cursor.
 - Bewusst kein Nachbau der Label-Studio-Annotations-UI (nur Import).
 
 ## Cross-references

@@ -1,15 +1,13 @@
 ---
 feature: active-learning
-status: planned
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-11
 ---
 
 # Active-Learning-Schleife — die ungewissesten Samples zuerst annotieren
-
-**Geplant (ROADMAP Phase 11) — noch nicht implementiert.**
 
 Annotations-Effizienz statt Brute-Force: Nach jedem Training identifiziert das
 System die ungewissesten Samples auf unbeschrifteten Dokumenten, surfaced sie
@@ -27,33 +25,41 @@ mehrere Iterationen mit messbarer Eval-Verbesserung je Runde.
 
 ## Invariants (was immer gelten muss)
 
-- Unsicherheit wird pro Sample gemessen (Token-Entropie und/oder Ensemble-Disagreement)
+- Unsicherheit wird pro Sample gemessen — `double_pass` (zwei T=0.7-Samples +
+  Diff) oder `length_zscore` (Abweichung von der mittleren Antwortlänge)
 - Samples werden nach Unsicherheit gerankt; nur die Top-N landen in der Queue
-- Eine Queue ist persistiert (`annotation_queues`) und einem Lauf zugeordnet
+- Eine Queue ist persistiert und einem Lauf zugeordnet
 - Inferenz über unbeschriftete Samples nutzt dieselbe Backend-Schicht wie die Evals
+- Stürzt der Scorer ab, endet der Lauf sauber als `failed` (kein Hängen)
 
-## API surface (geplant — der angestrebte Vertrag)
+## API surface (der Vertrag für Clients)
 
-- POST /active-learning/runs (model + unlabeled_dataset) → startet einen Lauf
+- POST /active-learning/runs → 201 (`model_ref` + `dataset` + `top_n` + `scorer`) ·
+  422 (`bad_model_ref` / fehlende Dataset-Datei)
+- GET /active-learning/runs → 200 · GET /active-learning/runs/{id} → 200 · 404
+- GET /active-learning/runs/{id}/queue → 200 (Top-N mit Snippet + Uncertainty)
+- POST /active-learning/runs/{id}/queue/{item_id}/annotated → 200 (Item als annotiert markieren)
+- POST /active-learning/runs/{id}/push-labelstudio → schiebt die Queue mit Pre-Annotations nach LS
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
-- Top-N-Queue-Größe, Unsicherheits-Methode (entropy / ensemble) pro Lauf
+- Top-N-Queue-Größe (`top_n`), Scorer (`double_pass` / `length_zscore`),
+  optionales `sample_limit` — pro Lauf im Request
 
 ## Extension points (für Plugins / externe Nutzung)
 
-- Unsicherheits-Scorer (token-entropy, ensemble-disagreement) — erweiterbar
+- Unsicherheits-Scorer (`double_pass`, `length_zscore`) — erweiterbar
 - Label-Studio-Push (siehe [labelstudio-import](labelstudio-import.md)) als Gegenrichtung
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) Ranking liefert die unsichersten Samples zuerst
-- (geplant) Loop schließt eine Iteration train→score→retrain ab
+- `tests/test_phase11_active_learning.py` — Scorer-Verhalten (double_pass/length_zscore),
+  Ranking nach Unsicherheit, End-to-End-Lauf, 422-Pfade, Mark-Annotated, Scorer-Crash → failed
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: keine `annotation_queues`-Tabelle, keine
-  Route, kein Scorer, kein UI-Tab, keine LS-Loop-Integration.
+- Der `train → score → retrain`-Loop wird heute Schritt-für-Schritt vom Nutzer
+  ausgelöst (Annotation fertig → neues Training); keine vollautomatische Mehr-Runden-Orchestrierung.
 
 ## Cross-references
 

@@ -1,15 +1,13 @@
 ---
 feature: quantization
-status: planned
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-19
 ---
 
 # Quantization-Pipeline — AWQ/GPTQ für günstige Inference
-
-**Geplant (ROADMAP Phase 19) — noch nicht implementiert.**
 
 Nach SFT/DPO automatisch quantisieren (AWQ/GPTQ), eval'en und promotbar machen
 — für günstige Inference. Ziel: `POST /models/{id}/quantize?method=awq&bits=4`
@@ -25,32 +23,36 @@ um den Quality-Loss zu messen.
 
 ## Invariants (was immer gelten muss)
 
-- Quantisierung läuft als Job; das Ergebnis ist ein **neuer** Registry-Eintrag
-  (eigene Version), nicht eine Mutation des Originals
-- Das Auto-Eval nutzt dieselbe Suite wie das Original → vergleichbares Δ-Tracking
+- Quantisierung läuft über ein austauschbares Backend; das Ergebnis ist ein
+  **neuer** Registry-Eintrag (eigene Version), nicht eine Mutation des Originals
+- Die neue Version erbt die Eval-Summary des Eltern-Modells als Vergleichsbasis
 - Adapter-/Modell-Pfad und Eval-Summary werden wie bei jeder Version eingefroren
 
-## API surface (geplant — der angestrebte Vertrag)
+## API surface (der Vertrag für Clients)
 
-- POST /models/{id}/quantize?method=awq&bits=4 → Job, erzeugt neue Modellversion
+- POST /models/{id}/quantize?method=awq&bits=4 → 201 (erzeugt eine neue Modellversion) ·
+  422 (unbekannte Methode / Eltern-Modell ohne Adapter) · 404 (unbekanntes Modell) ·
+  500 (Backend-Fehler)
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
-- AWQ-/GPTQ-Backends (autoawq / gptqmodel) als optionale Dependencies
+- AWQ-/GPTQ-Backends (autoawq / gptqmodel) als optionale Dependencies; ohne sie
+  ist nur das Mock-Backend verfügbar
 
 ## Extension points (für Plugins / externe Nutzung)
 
-- Quantisierungs-Backend (AWQ vs GPTQ) — austauschbar/erweiterbar
+- `quantization/runner.py` — Quantisierungs-Backend (AWQ vs GPTQ vs Mock) — austauschbar/erweiterbar
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) Quantize erzeugt neue Registry-Version + Auto-Eval-Δ
-- (geplant) Backend-Auswahl (awq/gptq) + Bits-Parameter
+- `tests/test_phase19_quantize.py` — neue Version erzeugt, unbekannte Methode → 422,
+  fehlendes Modell → 404, Eltern ohne Adapter → 422, Backend-Fehler → 500, Eval-Summary-Vererbung
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: keine Quantize-Route, keine AWQ/GPTQ-
-  Backends, keine Δ-Verknüpfung, keine UI-Aktion.
+- Die quantisierte Version erbt die Eval-Summary des Originals; ein automatischer
+  Re-Eval-Lauf mit Δ-Berechnung gegen dieselbe Suite ist noch nicht verdrahtet.
+- Reale AWQ/GPTQ-Backends erfordern die optionalen Dependencies; ohne sie läuft nur das Mock-Backend.
 
 ## Cross-references
 

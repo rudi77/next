@@ -2,7 +2,7 @@
 feature: hyperparameter-studies
 status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr:
 ---
@@ -42,6 +42,9 @@ jedes Feld der Spec abgetastet werden kann.
 
 - POST /studies → 201 `{study_id}` · 422 (Dataset-Referenz/Pfad-Fehler in der Basis-Spec)
 - GET /studies → 200 (alle Studies, neueste zuerst)
+- GET /studies/cost-summary → 200 (eine Zeile je Study: aggregierte GPU-Sekunden,
+  Peak-VRAM, Energie + bester Wert/Zielmetrik — für den „Cost vs. Best-Metric"-Plot;
+  vor `/{id}` deklariert, damit das Literal-Segment zuerst matcht)
 - GET /studies/{id} → 200 (inkl. `best_value`, `best_trial_id`) · 404
 - POST /studies/{id}/cancel → 200 `{status: cancelled|not_active}` · 404
 
@@ -71,3 +74,4 @@ jedes Feld der Spec abgetastet werden kann.
 
 - related_spec: [training-experiments](training-experiments.md) — jeder Trial ist ein Experiment
 - related_spec: [platform-foundation](platform-foundation.md) — MLflow-Wiring, Persistenz
+- related_spec: [cost-tracking](cost-tracking.md) — Quelle der Cost-Kennzahlen in `/studies/cost-summary`

@@ -1,15 +1,13 @@
 ---
 feature: synthetic-data
-status: planned
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-14
 ---
 
 # Synthetic Data Generation — Trainings-Pairs aus einem Teacher-LLM
-
-**Geplant (ROADMAP Phase 14) — noch nicht implementiert.**
 
 Aus wenigen Beispielen viele Trainings-Pairs mit einem Teacher-LLM generieren
 — z.B. aus 1000 Rechnungen + ihren JSONs 5000 augmentierte Varianten. Ziel:
@@ -31,9 +29,11 @@ Ergebnis als neues, registriertes Dataset mit Provenienz-Tags.
   mit „source: synth from <X> via <Y>"
 - Provenienz-Tags (Teacher-Modell, Instruction) hängen am erzeugten Dataset
 
-## API surface (geplant — der angestrebte Vertrag)
+## API surface (der Vertrag für Clients)
 
-- POST /synth (provider, model, source_dataset_id, instruction, target_count, seed) → Job
+- POST /synth → 201 (`provider`, `model`, `source_dataset_id`, `instruction`,
+  `target_count`, `seed`; registriert das Ergebnis als getaggtes Dataset, sha256-dedup) ·
+  422 (`unknown_source`) · 502 (Provider-Ausfall/Abbruch nach Folge-Fehlern)
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
@@ -46,13 +46,13 @@ Ergebnis als neues, registriertes Dataset mit Provenienz-Tags.
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) Job schreibt inkrementell und registriert bei Completion ein Dataset
-- (geplant) Provenienz-Tags landen am Dataset
+- `tests/test_phase14_synth.py` — seed-stabiles Sampling, inkrementelles Schreiben +
+  Registrierung mit Provenienz-Tags, Provider-Retry (429) + Abort-Verhalten, sha256-Dedup, Auth
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: keine `/synth`-Route, kein Synthese-Job,
-  kein MCP-Tool, keine Provenienz-Tags.
+- Anthropic/OpenAI als Teacher sind verdrahtet; weitere Provider erfordern einen
+  neuen Adapter. Ohne gesetzte Provider-Credentials scheitert der Job zur Laufzeit.
 
 ## Cross-references
 
