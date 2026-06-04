@@ -1,15 +1,17 @@
 ---
 feature: tokenizer-extension
-status: planned
+status: partial
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-21
 ---
 
 # Tokenizer-Erweiterung — Fachvokabular als zusätzliche Tokens
 
-**Geplant (ROADMAP Phase 21) — noch nicht implementiert.**
+**Teilweise implementiert (ROADMAP Phase 21).** Das `extra_tokens`-Feld und das
+Durchreichen an ms-swift (`--special_tokens` je Token, resize der Embedding-Layer)
+sind gebaut; der Eval-Hook für den Tokenisierungs-Vergleich vorher/nachher fehlt noch.
 
 Fachvokabular (Buchhaltungsbegriffe, interne Codes, Produkt-Codes) als
 zusätzliche Tokens, damit das Modell sie nicht in 3–4 BPE-Stücke zerlegen muss.
@@ -19,14 +21,15 @@ vorher/nachher vergleicht.
 
 ## Capabilities (was der Nutzer tun kann)
 
-- Eine Liste zusätzlicher Tokens an einem Experiment angeben
-- Vor/Nach-Vergleich der Tokenisierung der Eval-Suite sehen
+- Eine Liste zusätzlicher Tokens an einem Experiment angeben — **vorhanden**
+- Vor/Nach-Vergleich der Tokenisierung der Eval-Suite sehen — **geplant**
 
 ## Invariants (was immer gelten muss)
 
-- `extra_tokens` wird an ms-swift weitergereicht (resize_token_embeddings)
+- `extra_tokens` wird je Token als `--special_tokens` an ms-swift weitergereicht
+  (resize_token_embeddings); leere Liste emittiert nichts — **vorhanden**
+- Die Liste ist auf 10000 Einträge begrenzt (Validierung am Spec-Eingang)
 - Public-Feldnamen bleiben stabil; das Flag-Mapping bleibt im swift_builder isoliert
-- Der Eval-Hook vergleicht die Tokenisierung der Suite vor und nach Erweiterung
 
 ## API surface (der Vertrag für Clients)
 
@@ -39,17 +42,17 @@ vorher/nachher vergleicht.
 ## Extension points (für Plugins / externe Nutzung)
 
 - `training/swift_builder.py` — Weiterreichen von `extra_tokens` an ms-swift
-- Eval-Hook für den Tokenisierungs-Vergleich (siehe [eval-framework](eval-framework.md))
+- Eval-Hook für den Tokenisierungs-Vergleich (siehe [eval-framework](eval-framework.md)) — geplant
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) swift_builder reicht `extra_tokens` korrekt an ms-swift weiter
-- (geplant) Eval-Hook misst die Tokenisierungs-Differenz vorher/nachher
+- `tests/test_phase21_tokens.py` — Default leer, ein `--special_tokens` je Token,
+  Reihenfolge erhalten, kein Flag ohne Tokens, Zusammenspiel mit DPO/distributed, max_length-Grenze
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: kein `extra_tokens`-Feld, kein
-  Durchreichen, kein Tokenisierungs-Eval-Hook.
+- Der Eval-Hook, der die Tokenisierung der Suite vor und nach der Erweiterung
+  vergleicht, ist noch nicht gebaut (nur das Durchreichen an ms-swift steht).
 
 ## Cross-references
 

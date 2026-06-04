@@ -1,17 +1,18 @@
 ---
 feature: multimodal-training
-status: partial
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-9
 ---
 
 # Multimodal-Training — Doc-Extraktion mit Vision-LLMs
 
-**Teilweise implementiert (ROADMAP Phase 9).** Die ms-swift-Env-Verdrahtung
-für VLMs (SIZE_FACTOR/MAX_PIXELS via `MultimodalSettings`) steht bereits; das
-bild-haltige Dataset-Format, der Bundle-Upload und die Doc-Metriken fehlen noch.
+Dokument-Extraktion mit Vision-LLMs end-to-end: die ms-swift-Env-Verdrahtung
+(SIZE_FACTOR/MAX_PIXELS via `MultimodalSettings`), der bild-haltige Bundle-Upload
+(Zip mit Zip-Slip-/Symlink-Abwehr), das `images`/`videos`-Schema-Sniffing, die
+Media-Auslieferung und die Doc-Metriken (Layout-IoU, strukturierte F1) sind gebaut.
 
 Ziel: Dokument-Extraktion mit Qwen2-VL & Co. end-to-end — Upload eines
 image-haltigen Datasets, Training, Inferenz, Eval. Ein Qwen2-VL-Fine-Tune auf
@@ -20,22 +21,27 @@ einem kleinen Doc-Set soll als promotbares Modell landen.
 ## Capabilities (was der Nutzer tun kann)
 
 - Multimodale Settings (Bildgröße/Pixel-Budget) an einem Experiment setzen — **vorhanden**
-- Ein bild-haltiges Dataset als Bundle hochladen (Zip / Multi-File) — geplant
-- Ein VLM (z.B. Qwen2-VL) fine-tunen, mit korrekt gesetztem Modelltyp — geplant
-- Doc-Extraktion eval'en (Layout-IoU, Feld-für-Feld-F1) — geplant
-- Im Datasets-Tab eine Bild-Vorschau-Thumbnail sehen — geplant
+- Ein bild-haltiges Dataset als Bundle (Zip) hochladen — **vorhanden**
+- Ein VLM (z.B. Qwen2-VL) fine-tunen, mit gesetztem `model_type` — **vorhanden** (Durchreichung)
+- Doc-Extraktion eval'en (Layout-IoU `bbox_iou`, strukturierte `structured_extraction_f1`) — **vorhanden**
+- Bild-Thumbnails eines Bundles über die Media-Route abrufen — **vorhanden**
 
 ## Invariants (was immer gelten muss)
 
 - Bild-Pfade sind relativ zum Dataset-Root und werden als Bundle mit hochgeladen
-- Die Format-Erkennung erkennt `images`/`videos`-Schema in JSONL
-- `swift_builder` setzt `--model_type` für VLMs korrekt und reicht die
-  multimodalen Env-Variablen (SIZE_FACTOR, MAX_PIXELS) durch — **vorhanden** für Env
+- Die Format-Erkennung erkennt `images`/`videos`/`audios`-Schema in JSONL (Stichprobe)
+- `swift_builder` reicht `--model_type` und die multimodalen Env-Variablen
+  (SIZE_FACTOR, MAX_PIXELS) durch
 - Ein Bundle-Upload durchläuft dieselbe sha256-Dedup/Validierung wie normale Datasets
+- Der Bundle-Upload wehrt Zip-Slip und Symlink-Einträge ab; die Media-Route
+  blockiert Path-Traversal
 
-## API surface (geplant — der angestrebte Vertrag)
+## API surface (der Vertrag für Clients)
 
-- POST /datasets/bundle → Multi-File-/Zip-Upload eines bild-haltigen Datasets
+- POST /datasets/bundle → 201 (Zip-Upload eines bild-haltigen Datasets) · 422
+  (text-only Bundle / kein JSONL / ungültiges Zip / Symlink- bzw. Zip-Slip-Eintrag)
+- GET /datasets/{id}/media?path=… → 200 (liefert eine Bild-/Mediendatei aus dem
+  Bundle) · 404 (Text-Dataset) · blockt Traversal
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
@@ -44,20 +50,21 @@ einem kleinen Doc-Set soll als promotbares Modell landen.
 
 ## Extension points (für Plugins / externe Nutzung)
 
-- `training/dataset_formats.py` — `images`/`videos`-Schema-Erkennung (zu ergänzen)
-- neue Eval-Metriken `bounding_box_iou`, `structured_extraction_f1` als Plugins
-  unter `trainpipe/evals/metrics/`
+- `training/dataset_formats.py` — `images`/`videos`/`audios`-Schema-Erkennung
+- Eval-Metriken `bbox_iou`, `structured_extraction_f1` als Plugins unter
+  `trainpipe/evals/metrics/`
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) E2E mit minimalem Qwen2-VL-Sample-Set
-- (geplant) Bundle-Upload + relative Bild-Pfad-Auflösung
+- `tests/test_phase9_multimodal.py` — Schema-Erkennung (text/image/video, ungültige
+  Media-Felder), Bundle-Upload + Abwehr (text-only, Symlink, Zip-Slip, kein Zip/JSONL),
+  Media-Route (Thumbnail, Traversal-Block, 404 bei Text), `bbox_iou` + `structured_extraction_f1`
 
 ## Known gaps
 
-- `POST /datasets/bundle`, die Image-Schema-Erkennung, die VLM-`model_type`-
-  Verifizierung und die Doc-Metriken sind noch nicht gebaut.
-- Die UI hat keine Bild-Vorschau.
+- Ein echtes End-to-End mit einem Qwen2-VL-Sample-Set läuft nur auf einem GPU-Host
+  (kein automatisierter CI-Test, da ohne GPU/Modellgewichte).
+- Die UI bindet die Media-Route noch nicht als Thumbnail-Vorschau ein.
 
 ## Cross-references
 

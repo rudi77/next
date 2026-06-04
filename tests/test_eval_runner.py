@@ -114,6 +114,17 @@ def test_load_samples_broken_jsonl(tmp_path):
         _load_samples(f, limit=None)
 
 
+def test_load_samples_rejects_parquet(tmp_path):
+    # Parquet is a valid *upload* format but the eval runner does in-process
+    # streaming reads and deliberately does not support it (spec: eval
+    # datasets are jsonl/json/csv/tsv only). The suffix is rejected before any
+    # read, so the file contents don't matter.
+    f = tmp_path / "evals.parquet"
+    f.write_text("not really parquet", encoding="utf-8")
+    with pytest.raises(DatasetReadError, match="parquet"):
+        _load_samples(f, limit=None)
+
+
 # ---------------------------------------------------------------------------
 # metric instantiation
 # ---------------------------------------------------------------------------

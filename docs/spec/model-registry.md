@@ -2,7 +2,7 @@
 feature: model-registry
 status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-7
 ---
@@ -55,6 +55,10 @@ und einen Snapshot der letzten Eval-Scores ein.
 - POST /models → 409 (`version_exists`, bei explizit doppelter Version)
 - GET /models → 200 (optional gefiltert nach `name`, `alias`)
 - GET /models/{name} → 200 (alle Versionen)
+- GET /models/{id}/datasets → 200 (Trainings-Lineage: welche Datasets diese
+  Version sah — Details siehe [pii-redaction](pii-redaction.md))
+- POST /models/{id}/quantize → 201 (erzeugt eine neue, quantisierte Version —
+  Details siehe [quantization](quantization.md))
 - GET /models/{name}/{ref} → 200 (`ref` = Versionsnummer oder Alias) · 404
 - POST /models/{name}/aliases/{alias} → 200 (Body `{model_id}` oder `{version}`) · 404 · 422 (`missing_target`/`cross_family_alias`)
 - DELETE /models/{name}/aliases/{alias} → 200 `{status}`
@@ -90,4 +94,6 @@ und einen Snapshot der letzten Eval-Scores ein.
 
 - related_spec: [eval-framework](eval-framework.md) — Quelle der eingefrorenen Eval-Summary
 - related_spec: [mcp-server](mcp-server.md) — Agenten-Tools für die Registry
+- related_spec: [quantization](quantization.md) — `POST /models/{id}/quantize` erzeugt eine Version
+- related_spec: [pii-redaction](pii-redaction.md) — `GET /models/{id}/datasets` (Lineage)
 - adr: ROADMAP.md — Phase 7 „Modell-Registry & Promotion"

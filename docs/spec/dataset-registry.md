@@ -2,7 +2,7 @@
 feature: dataset-registry
 status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr:
 ---
@@ -48,6 +48,15 @@ die Registry brauchen.
 - GET /datasets/{id}/preview?n= → 200 (Plaintext) · 404 · 410 (Datei fehlt auf Platte)
 - DELETE /datasets/{id} → 200 `{deleted}` · 404 · 409 (`dataset_in_use`, ohne `?force=true`)
 
+Weitere Routen hängen am selben `/datasets`-Router, gehören aber zu Folge-Features
+und sind dort spezifiziert (sie durchlaufen alle dieselbe Registrierung — sha256-Dedup,
+Format-Validierung):
+
+- `POST /datasets/bundle`, `GET /datasets/{id}/media` → [multimodal-training](multimodal-training.md)
+- `POST /datasets/{id}/split`, `POST /mixes` → [dataset-versioning](dataset-versioning.md)
+- `POST /datasets/{id}/redact`, `GET /datasets/{id}/models` → [pii-redaction](pii-redaction.md)
+- `POST /datasets/from-labelstudio` → [labelstudio-import](labelstudio-import.md)
+
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
 - `TRAINPIPE_MAX_DATASET_UPLOAD_BYTES: int` (default 5 GiB) — Upload-Limit
@@ -77,3 +86,5 @@ die Registry brauchen.
 
 - related_spec: [training-experiments](training-experiments.md) — Konsument der `ds:`-Referenzen
 - related_spec: [eval-framework](eval-framework.md) — Eval-Suites referenzieren Datasets gleich
+- related_spec: [multimodal-training](multimodal-training.md), [dataset-versioning](dataset-versioning.md),
+  [pii-redaction](pii-redaction.md), [labelstudio-import](labelstudio-import.md) — erweitern den `/datasets`-Router

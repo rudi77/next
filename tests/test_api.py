@@ -97,6 +97,20 @@ def test_submit_rejects_wrong_key(state, client):
     assert r.status_code == 401
 
 
+def test_ui_config_public_and_strips_mlflow_credentials(state, client, monkeypatch):
+    # /ui/config is one of the three public routes (no X-API-Key) and must
+    # never echo embedded user:pass credentials from the MLflow URI.
+    monkeypatch.setattr(
+        "trainpipe.settings.settings.mlflow_tracking_uri",
+        "http://user:s3cret@mlflow.internal:5000/path",
+    )
+    r = client.get("/ui/config")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mlflow_tracking_uri"] == "http://mlflow.internal:5000/path"
+    assert "s3cret" not in r.text
+
+
 def test_submit_and_get(state, client):
     r = client.post(
         "/experiments", json={"model": "m1", "dataset": ["d1"]}, headers=HEADERS

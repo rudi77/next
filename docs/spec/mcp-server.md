@@ -2,7 +2,7 @@
 feature: mcp-server
 status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr:
 ---
@@ -22,6 +22,9 @@ ein dünner Wrapper um die REST-API: er hält einen httpx-Client mit dem
 - GPUs: Pool-Status abfragen
 - Datasets: hochladen (base64), auflisten, abrufen, Vorschau, löschen
 - Modelle: registrieren, auflisten, auflösen, Alias umhängen, löschen
+- Inferenz: einen Prompt schicken (`inference`) und zwei Modelle vergleichen (`inference_compare`)
+- Synthetische Daten aus einem Teacher-LLM generieren (`synth_dataset`)
+- Compliance: betroffene Datasets/Modelle für „Recht auf Löschung" scannen (`forget_scan`)
 - Den Server standalone betreiben (`python -m trainpipe.mcp` / `trainpipe-mcp`)
 
 ## Invariants (was immer gelten muss)
@@ -43,7 +46,8 @@ ein dünner Wrapper um die REST-API: er hält einen httpx-Client mit dem
 - Tools: `submit_experiment`, `get_experiment`, `list_experiments`, `cancel_experiment`,
   `tail_logs`, `submit_study`, `list_studies`, `get_study`, `cancel_study`, `gpu_status`,
   `upload_dataset`, `list_datasets`, `get_dataset`, `preview_dataset`, `delete_dataset`,
-  `register_model`, `list_models`, `get_model`, `set_alias`, `delete_model`
+  `register_model`, `list_models`, `get_model`, `set_alias`, `delete_model`,
+  `inference`, `inference_compare`, `synth_dataset`, `forget_scan`
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
@@ -57,7 +61,9 @@ ein dünner Wrapper um die REST-API: er hält einen httpx-Client mit dem
 
 ## Tests (müssen existieren und grün sein)
 
-- `tests/test_mcp_module.py` — Import ohne API-Key, Tool-Registrierung, Client-Lazy-Init
+- `tests/test_mcp_module.py` — Import ohne API-Key, Registrierung **aller** oben
+  gelisteten Tools, jedes Tool hat eine Beschreibung, Client-Lazy-Init
+  (übersprungen, wenn das `mcp`-Extra nicht installiert ist)
 
 ## Known gaps
 
@@ -69,4 +75,7 @@ ein dünner Wrapper um die REST-API: er hält einen httpx-Client mit dem
 
 - related_spec: [training-experiments](training-experiments.md), [hyperparameter-studies](hyperparameter-studies.md)
 - related_spec: [dataset-registry](dataset-registry.md), [model-registry](model-registry.md)
+- related_spec: [inference-playground](inference-playground.md) — `inference` / `inference_compare`
+- related_spec: [synthetic-data](synthetic-data.md) — `synth_dataset`
+- related_spec: [pii-redaction](pii-redaction.md) — `forget_scan`
 - related_spec: [platform-foundation](platform-foundation.md) — Auth-Header, REST-Vertrag

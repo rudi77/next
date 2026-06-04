@@ -1,15 +1,13 @@
 ---
 feature: preference-training
-status: planned
+status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr: ROADMAP.md#phase-13
 ---
 
 # Preference-Training — DPO/RLHF in der ExperimentSpec
-
-**Geplant (ROADMAP Phase 13) — noch nicht implementiert.**
 
 Voraussetzung für die DPO-Stage der Multi-Stage-Pipelines und auch standalone
 nützlich. Ziel: einen DPO-Spec mit chosen/rejected-Dataset einreichen,
@@ -27,8 +25,8 @@ ms-swift trainiert via `swift rlhf`, MLflow zeigt die Preference-Metriken
 
 - `train_kind` ist ein geschlossenes Set (`sft`/`dpo`/`kto`/`ppo`/`grpo`)
 - Das `{prompt, chosen, rejected}`-Format wird bei der Dataset-Validierung erkannt
-- `swift_builder` schaltet bei Nicht-SFT auf `swift rlhf --rlhf_type <kind>` um
-  (heute baut er ausschließlich `swift sft`)
+- `swift_builder` schaltet bei Nicht-SFT auf `swift rlhf --rlhf_type <kind>` um;
+  SFT bleibt auf `swift sft`
 - Public-Feldnamen der Spec bleiben stabil; das Flag-Mapping bleibt im swift_builder isoliert
 
 ## API surface (der Vertrag für Clients)
@@ -46,13 +44,13 @@ ms-swift trainiert via `swift rlhf`, MLflow zeigt die Preference-Metriken
 
 ## Tests (müssen existieren und grün sein)
 
-- (geplant) swift_builder erzeugt `swift rlhf --rlhf_type dpo` für DPO-Specs
-- (geplant) Preference-Dataset-Format-Validierung (chosen/rejected vorhanden)
+- `tests/test_phase13_dpo.py` — Default `sft`, `swift rlhf --rlhf_type` für dpo/kto/ppo/grpo,
+  Preference-Format-Erkennung (chosen/rejected, mixed/leer → False), unbekanntes `train_kind` → 422
 
 ## Known gaps
 
-- Gesamtes Feature noch nicht gebaut: kein `train_kind`-Feld, keine `swift rlhf`-
-  Verzweigung, kein Preference-Format-Check, kein UI-Select.
+- Die Preference-Metriken (reward_chosen/reward_rejected/kl_divergence) hängen an
+  ms-swift's MLflow-Logging — trainpipe reicht sie nur durch, prüft sie nicht.
 
 ## Cross-references
 

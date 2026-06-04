@@ -2,7 +2,7 @@
 feature: web-ui
 status: shipped
 since: 2026-05-29
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 owner:
 adr:
 ---
@@ -17,12 +17,19 @@ sekret-freie Konfiguration (u.a. die MLflow-URL) von einem öffentlichen Endpunk
 
 ## Capabilities (was der Nutzer tun kann)
 
-- Über Tabs navigieren: Experiments, Studies, Evals, Models, Datasets, GPUs
+- Über Tabs navigieren: Experiments, Studies, Pipelines, Evals, Models,
+  Playground, Active-Learning, Watches, Datasets, Synth, Compliance, GPUs
 - Experimente einreichen, Detail/Logs ansehen, abbrechen
 - Studies starten und Fortschritt verfolgen
+- Multi-Stage-Pipelines als DAG anlegen und Stage-Status verfolgen
 - Eval-Suites/-Runs anlegen, Per-Sample-Resultate und Run-Vergleiche ansehen
 - Modelle registrieren, Aliase setzen/umhängen, Versionen sehen
+- Im Playground Prompts gegen ein Modell schicken und Versionen vergleichen
+- Active-Learning-Läufe starten und die Annotations-Queue durchsehen
+- Watches (Cron/Drift) anlegen, aktivieren/deaktivieren
 - Datasets hochladen, Vorschau ansehen, löschen
+- Synthetische Datasets aus einem Teacher-LLM generieren
+- Compliance: „Forget"-Scan über Datasets/Modelle laufen lassen
 - GPU-Pool-Belegung sehen und von einer Lease zum Experiment springen
 - Direkt zum zugehörigen MLflow-Run verlinken
 
