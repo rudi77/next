@@ -1,10 +1,16 @@
 # trainpipe
 
 An AI training pipeline for a single Linux box with 1-N NVIDIA GPUs. Submit
-`ms-swift` fine-tuning jobs (LoRA / full / qlora / longlora / adalora /
-ia3), watch them stream live to MLflow, queue more than you have GPUs for,
-and drive hyperparameter sweeps via Optuna — all through a small REST API
-that an agent (or a human) can drive.
+`ms-swift` jobs — supervised fine-tuning (LoRA / full / qlora / longlora /
+adalora / ia3), (continued) pretraining, and preference/RL training
+(DPO / KTO / PPO / GRPO) — watch them stream live to MLflow, queue more
+than you have GPUs for, and drive hyperparameter sweeps via Optuna. Around
+that core sits a full lifecycle: a dataset registry, an eval framework, a
+model registry with aliases, quantization, an inference playground, and an
+**agentic data-acquisition** module that builds a training set from a
+natural-language brief. Everything is reachable through a single REST API
+that an agent (via MCP or the `trainpipe` CLI) or a human (via the web UI)
+can drive.
 
 ## Architecture
 
@@ -28,7 +34,7 @@ that an agent (or a human) can drive.
 │                  ┌─────────┬──────┼──────┬─────────┐                │
 │                  ▼         ▼      ▼      ▼         ▼                │
 │                GPU 0     GPU 1  GPU 2  GPU 3    (idle)              │
-│                swift sft (CUDA_VISIBLE_DEVICES + MLFLOW_RUN_ID)     │
+│            swift sft/pt/rlhf (CUDA_VISIBLE_DEVICES + MLFLOW_RUN_ID) │
 │                                                                     │
 │  ┌────────────┐  ask trial → enqueue exp → wait → read metric       │
 │  │  Optuna    │  tell trial. Up to max_concurrent in parallel.      │
@@ -41,7 +47,9 @@ that an agent (or a human) can drive.
 
 ## What it does
 
-- Queue 1..N concurrent ms-swift training runs across the local GPUs.
+- Queue 1..N concurrent ms-swift training runs across the local GPUs —
+  SFT, (continued) pretraining (`train_kind=pt`), and preference/RL
+  (`dpo` / `kto` / `ppo` / `grpo`) all from one `ExperimentSpec`.
 - One MLflow run per experiment, with our `trainpipe.experiment_id` /
   `trainpipe.study_id` / `trainpipe.trial_number` tags so the UI groups
   related runs.
@@ -50,7 +58,17 @@ that an agent (or a human) can drive.
   requeues experiments that were running pre-crash.
 - Hyperparameter sweeps via Optuna with a JSON-path-based search-space
   DSL — submit one `StudyConfig` and trials get enqueued automatically.
-- Single API surface for both humans and agents.
+- A **dataset registry** (upload, dedup by sha256, split / mix / redact /
+  bundle, Label-Studio import, lineage queries) addressed by `ds:<id>` refs.
+- An **eval framework** (suites, runs, 7 metrics incl. LLM-as-judge,
+  compare for regressions) and a **model registry** (versions, aliases,
+  dataset lineage, quantization).
+- An **inference playground** (sync / streaming predict, N-way compare).
+- **Agentic data acquisition**: turn a natural-language brief into a
+  registered, PII-redacted training set — research + synthesize, with
+  cost-budget, strict-license, and human-in-the-loop clarification.
+- A single API surface for both humans and agents — driven from the web
+  UI, the `trainpipe` CLI, or 40 MCP tools.
 
 ## Setup
 
@@ -268,11 +286,17 @@ Expected ms-swift JSONL formats:
 The API serves a single-page UI at **http://server:8080/** (no separate
 build step — Tailwind + Alpine.js via CDN). Tabs:
 
-- **Experiments** — submit form, table with status badges, detail panel
-  with live log tail, MLflow run link, cancel button
-- **Studies** — Optuna sweep submit form + progress table
+- **Experiments** — submit form (SFT / pretraining / RL-GRPO controls),
+  table with status badges, detail panel with live log tail, MLflow run
+  link, cancel button
+- **Studies** — Optuna sweep submit form + progress table + cost plot
 - **Datasets** — drag-and-drop upload, click-to-copy `ds:<id>` ref,
   preview, delete
+- **Evals** — suites, runs, aggregate scores, compare
+- **Models** — registry with versions and aliases
+- **Pipelines** — multi-stage workflow creation form + DAG view
+- **Acquisition** — start a data-acquisition run from a brief, answer
+  clarifying questions, watch it register a dataset
 - **GPUs** — card per device with lease state
 
 API key is stored in browser `localStorage` — first visit prompts for
@@ -349,9 +373,10 @@ The MCP layer hides the API key from the model context and exposes
 each operation as a structured tool. See the [MCP integration](#mcp-integration)
 section below for the `claude mcp add` command — for Cursor, drop the
 same command into `~/.cursor/mcp.json` under `mcpServers`. After
-registration the agent sees 15 typed tools instead of curl:
+registration the agent sees 40 typed tools instead of curl:
 `submit_experiment(spec)`, `upload_dataset(name, filename, content_b64)`,
-`tail_logs(id, n_lines)`, ...
+`tail_logs(id, n_lines)`, `run_eval(suite_id, experiment_id)`,
+`start_acquisition(name, brief, ...)`, ...
 
 When in doubt, prefer MCP for **repeated** use (cleaner tool calls,
 schemas guide the model) and Bash+curl for **one-offs** or for keys
@@ -457,23 +482,111 @@ iterate fast on the things it *can* vary.
 
 ## REST API
 
-| Method | Path                                  | Purpose                          |
-| ------ | ------------------------------------- | -------------------------------- |
-| GET    | `/health`                             | Liveness (no auth)               |
-| POST   | `/experiments`                        | Submit one experiment            |
-| POST   | `/experiments/batch`                  | Submit a list                    |
-| GET    | `/experiments`                        | List (filter: status, study_id)  |
-| GET    | `/experiments/{id}`                   | Detail                           |
-| POST   | `/experiments/{id}/cancel`            | Cancel (queued or running)       |
-| GET    | `/experiments/{id}/logs`              | Download full log                |
-| GET    | `/experiments/{id}/logs/stream`       | SSE live tail                    |
-| GET    | `/gpus`                               | Pool state with leases           |
-| POST   | `/studies`                            | Create + start a sweep           |
-| GET    | `/studies`                            | List studies                     |
-| GET    | `/studies/{id}`                       | Detail (best_value, best_trial)  |
-| POST   | `/studies/{id}/cancel`                | Stop driver, mark completed      |
+The surface below is grouped by resource. Every route except `/health`
+and `/ui/config` requires the `X-API-Key` header. The live, authoritative
+contract is the OpenAPI doc at `/docs` (Swagger) / `/openapi.json`.
 
-All routes except `/health` require the `X-API-Key` header.
+**Experiments & GPUs**
+
+| Method | Path                            | Purpose                          |
+| ------ | ------------------------------- | -------------------------------- |
+| GET    | `/health`                       | Liveness (no auth)               |
+| POST   | `/experiments`                  | Submit one experiment            |
+| POST   | `/experiments/batch`            | Submit a list (atomic)           |
+| GET    | `/experiments`                  | List (filter: status, study_id)  |
+| GET    | `/experiments/{id}`             | Detail                           |
+| POST   | `/experiments/{id}/cancel`      | Cancel (queued or running)       |
+| GET    | `/experiments/{id}/logs`        | Download full log                |
+| GET    | `/experiments/{id}/logs/stream` | SSE live tail                    |
+| GET    | `/gpus`                         | Pool state with leases           |
+
+**Studies (Optuna sweeps)**
+
+| Method | Path                     | Purpose                          |
+| ------ | ------------------------ | -------------------------------- |
+| POST   | `/studies`               | Create + start a sweep           |
+| GET    | `/studies`               | List studies                     |
+| GET    | `/studies/cost-summary`  | GPU-seconds / energy per study   |
+| GET    | `/studies/{id}`          | Detail (best_value, best_trial)  |
+| POST   | `/studies/{id}/cancel`   | Stop driver, mark completed      |
+
+**Datasets**
+
+| Method | Path                          | Purpose                              |
+| ------ | ----------------------------- | ------------------------------------ |
+| POST   | `/datasets`                   | Upload (dedup by sha256 → 200/201)   |
+| GET    | `/datasets`                   | List                                 |
+| GET    | `/datasets/{id}`              | Detail                               |
+| GET    | `/datasets/{id}/preview`      | First N rows (text formats)          |
+| GET    | `/datasets/{id}/media`        | Serve a bundled image                |
+| POST   | `/datasets/{id}/split`        | Deterministic train/val split        |
+| POST   | `/datasets/mixes`             | Weighted mix of datasets             |
+| POST   | `/datasets/{id}/redact`       | PII redaction → new dataset          |
+| POST   | `/datasets/bundle`            | Images + JSONL as a ZIP bundle       |
+| POST   | `/datasets/from-labelstudio`  | Import a Label-Studio export         |
+| GET    | `/datasets/{id}/models`       | Lineage: models trained on this data |
+| DELETE | `/datasets/{id}`              | Delete (409 if referenced; `?force`) |
+
+**Evals**
+
+| Method | Path                       | Purpose                          |
+| ------ | -------------------------- | -------------------------------- |
+| POST   | `/evals/suites`            | Create eval suite                |
+| GET    | `/evals/suites`            | List suites                      |
+| GET    | `/evals/suites/{id}`       | Suite detail                     |
+| DELETE | `/evals/suites/{id}`       | Delete suite (`?force`)          |
+| POST   | `/evals/runs`              | Enqueue an eval run              |
+| GET    | `/evals/runs`              | List runs (filters)              |
+| GET    | `/evals/runs/{id}`         | Run detail + aggregate           |
+| GET    | `/evals/runs/{id}/results` | Per-sample results (paginated)   |
+| POST   | `/evals/runs/{id}/cancel`  | Cancel a run                     |
+| GET    | `/evals/compare`           | Compare runs → deltas            |
+
+**Models & inference**
+
+| Method | Path                              | Purpose                          |
+| ------ | --------------------------------- | -------------------------------- |
+| POST   | `/models`                         | Register a trained model         |
+| GET    | `/models`                         | List (filter: name, alias)       |
+| GET    | `/models/{name}`                  | All versions of a family         |
+| GET    | `/models/{name}/{alias_or_version}` | Resolve one version            |
+| GET    | `/models/{id}/datasets`           | Dataset lineage of a model       |
+| POST   | `/models/{name}/aliases/{alias}`  | Move an alias (atomic)           |
+| DELETE | `/models/{name}/aliases/{alias}`  | Drop an alias                    |
+| POST   | `/models/{id}/quantize`           | Quantize a model                 |
+| DELETE | `/models/{id}`                    | Delete (409 if aliased; `?force`)|
+| POST   | `/inferences`                     | Sync predict                     |
+| POST   | `/inferences/stream`              | Streaming predict (SSE)          |
+| POST   | `/inferences/compare`             | N-way playground compare         |
+| GET    | `/inferences/cache`               | Loaded-adapter cache state       |
+
+**Pipelines, active learning, watches, synth, compliance**
+
+| Method | Path                                              | Purpose                       |
+| ------ | ------------------------------------------------- | ----------------------------- |
+| POST   | `/pipelines`                                      | Create + start a pipeline     |
+| GET    | `/pipelines` · `/pipelines/{id}`                  | List / detail                 |
+| POST   | `/pipelines/{id}/cancel`                          | Cancel                        |
+| POST   | `/active-learning/runs`                           | Start an AL run               |
+| GET    | `/active-learning/runs` · `/runs/{id}`            | List / detail                 |
+| GET    | `/active-learning/runs/{id}/queue`                | Read the labeling queue       |
+| POST   | `/active-learning/runs/{id}/queue/{item}/annotated` | Mark item annotated         |
+| POST   | `/active-learning/runs/{id}/push-labelstudio`     | Push queue to Label Studio    |
+| POST   | `/watches` · `GET` · `DELETE /watches/{id}`       | Continuous-training watches   |
+| POST   | `/watches/{id}/enable` · `/disable`               | Toggle a watch                |
+| POST   | `/synth`                                          | Synthesize a dataset          |
+| POST   | `/compliance/forget-scan`                         | GDPR substring/regex scan     |
+
+**Acquisitions (agentic data acquisition)**
+
+| Method | Path                               | Purpose                             |
+| ------ | ---------------------------------- | ----------------------------------- |
+| POST   | `/acquisitions`                    | Start a run from a brief            |
+| GET    | `/acquisitions`                    | List (filter: status)               |
+| GET    | `/acquisitions/{id}`               | Detail (phase, counts, dataset_id)  |
+| GET    | `/acquisitions/{id}/sources`       | Web sources considered (audit)      |
+| PATCH  | `/acquisitions/{id}/answers`       | Answer clarifying questions         |
+| POST   | `/acquisitions/{id}/cancel`        | Cancel a run                        |
 
 ## MCP integration
 
@@ -493,10 +606,22 @@ claude mcp add trainpipe -- env \
   python -m trainpipe.mcp
 ```
 
-Tools exposed: `submit_experiment`, `get_experiment`, `list_experiments`,
-`cancel_experiment`, `tail_logs`, `submit_study`, `list_studies`,
-`get_study`, `cancel_study`, `gpu_status`, `upload_dataset`,
-`list_datasets`, `get_dataset`, `preview_dataset`, `delete_dataset`.
+The 40 tools mirror the REST surface, grouped by resource:
+
+- **Experiments / GPUs**: `submit_experiment`, `get_experiment`,
+  `list_experiments`, `cancel_experiment`, `tail_logs`, `gpu_status`
+- **Studies**: `submit_study`, `list_studies`, `get_study`, `cancel_study`
+- **Datasets**: `upload_dataset`, `list_datasets`, `get_dataset`,
+  `preview_dataset`, `delete_dataset`, `synth_dataset`
+- **Models / inference**: `register_model`, `list_models`, `get_model`,
+  `set_alias`, `delete_model`, `inference`, `inference_compare`
+- **Evals**: `create_eval_suite`, `list_eval_suites`, `get_eval_suite`,
+  `delete_eval_suite`, `run_eval`, `list_eval_runs`, `get_eval_run`,
+  `get_eval_results`, `cancel_eval_run`, `compare_evals`
+- **Acquisition**: `start_acquisition`, `get_acquisition`,
+  `get_acquisition_sources`, `list_acquisitions`, `answer_acquisition`,
+  `cancel_acquisition`
+- **Compliance**: `forget_scan`
 
 Auth never leaks into the model context — the API key stays inside the
 MCP server process; the agent only sees tool calls and their results.
@@ -525,8 +650,12 @@ trainpipe/
 │   ├── main.py               FastAPI app + lifespan
 │   ├── auth.py               X-API-Key middleware
 │   ├── deps.py               typed accessors from app.state
-│   ├── schemas.py            ExperimentSpec, StudyConfig, …
-│   └── routes/{experiments,gpus,studies}.py
+│   ├── schemas.py            ExperimentSpec, StudyConfig, AcquisitionRequest, …
+│   ├── validation.py         submit-time dataset/path checks
+│   └── routes/               one module per resource (experiments, gpus,
+│                             studies, datasets, evals, models, inferences,
+│                             pipelines, active_learning, watches, synth,
+│                             compliance, acquisitions)
 ├── core/
 │   ├── db.py                 aiosqlite, WAL, versioned migrations
 │   └── repository.py         CRUD for experiments, studies, events
@@ -535,22 +664,46 @@ trainpipe/
 │   ├── runner.py             asyncio subprocess + POSIX process group
 │   └── loop.py               dispatch + monitor + MLflow run creation
 ├── training/
-│   └── swift_builder.py      ExperimentSpec → (argv, env)
+│   ├── swift_builder.py      ExperimentSpec → (argv, env); sft/pt/rlhf
+│   ├── dataset_refs.py       resolve ds:<id> refs at submit time
+│   └── dataset_formats.py    JSONL/Parquet format detection + preview
 ├── autoresearch/
 │   ├── search_spaces.py      dotted-path overrides + suggest_* dispatch
 │   ├── study.py              StudyDriver: ask → enqueue → wait → tell
 │   └── manager.py            owns drivers in the API process
-├── settings.py
-└── cli.py                    `trainpipe` entry point
+├── evals/                    suites, runner, dispatcher, metrics/
+├── inference/                adapter cache + predict service
+├── quantization/             post-training quantization runner
+├── pipelines/                multi-stage workflow driver + manager
+├── active_learning/          uncertainty sampling + labeling queue
+├── watches/                  continuous-training watches
+├── synth/                    synthetic-dataset runner
+├── acquisition/              agentic data acquisition
+│   ├── driver.py             phase machine: intake→research→acquire→
+│   │                         synthesize→curate→register
+│   ├── manager.py            owns acquisition drivers + status transitions
+│   ├── web.py                search providers, license gate, SSRF/robots
+│   └── runner.py             teacher-LLM providers (+ budget wrapper)
+├── redaction/                PII redactor (shared by datasets + acquisition)
+├── compliance/               GDPR forget-scan + CLI
+├── integrations/             Label Studio import/push
+├── core/repository.py, settings.py
+├── client.py                 shared httpx client (CLI + MCP)
+├── cli.py                    `trainpipe` entry point (serve + operative client)
+├── mcp.py                    `trainpipe-mcp` — 40 MCP tools over the REST API
+└── ui/index.html             single-page web UI
 ```
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest                              # 51 unit tests, all should pass
+pytest                              # the full suite (500+ tests) should pass
 ruff check trainpipe tests
 ```
+
+The behavior-first specs per subsystem live in [docs/spec/](docs/spec/);
+the long-form user/operator manual is [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## License
 
