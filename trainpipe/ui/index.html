@@ -800,11 +800,12 @@
     <section x-show="tab === 'pipelines'">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Pipelines</h2>
+        <button @click="openCreatePipeline()"
+                class="bg-cyan-700 text-white px-3 py-2 rounded text-sm">+ New pipeline</button>
       </div>
       <p class="text-sm text-slate-600 mb-3">
         Multi-stage training (CPT → SFT → DPO and friends).
-        Submit via <code class="text-xs bg-slate-100 px-1 rounded">POST /pipelines</code>
-        or MCP. Each stage runs as a regular experiment under the hood.
+        Each stage runs as a regular experiment under the hood.
       </p>
       <div class="bg-white rounded-lg shadow overflow-x-auto">
         <table class="w-full text-sm">
@@ -1121,6 +1122,7 @@
             <label class="text-xs text-slate-600 block">training type</label>
             <select x-model="expDraft.train_kind" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
               <option value="sft">SFT (instruction tuning)</option>
+              <option value="pt">PT (continued pretraining)</option>
               <option value="dpo">DPO</option>
               <option value="kto">KTO</option>
               <option value="ppo">PPO</option>
@@ -1155,6 +1157,49 @@
           <label class="text-xs text-slate-600 block">val_dataset (optional, one per line)</label>
           <textarea x-model="expDraft.val_dataset" rows="2"
                     class="w-full border rounded px-2 py-2 text-base sm:text-sm font-mono"></textarea>
+        </div>
+        <!-- RL / preference knobs — only for the swift rlhf family -->
+        <div x-show="isRlhfKind(expDraft.train_kind)"
+             class="border border-amber-200 bg-amber-50/60 rounded p-3 space-y-3">
+          <div class="text-xs font-semibold text-amber-800">RL / preference settings</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-slate-600 block">beta (KL coef, optional)</label>
+              <input type="number" step="0.01" min="0" x-model="expDraft.rlhf.beta"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+            <div x-show="['ppo','grpo'].includes(expDraft.train_kind)">
+              <label class="text-xs text-slate-600 block">temperature</label>
+              <input type="number" step="0.1" min="0" max="2" x-model="expDraft.rlhf.temperature"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+          </div>
+          <div x-show="['ppo','grpo'].includes(expDraft.train_kind)">
+            <label class="text-xs text-slate-600 block">
+              reward_model <span class="text-slate-400">(required for PPO; PPO/GRPO need a reward)</span>
+            </label>
+            <input x-model="expDraft.rlhf.reward_model" placeholder="e.g. Qwen/Qwen2.5-Math-RM"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div x-show="expDraft.train_kind === 'grpo'" class="grid grid-cols-2 gap-3">
+            <div class="col-span-2">
+              <label class="text-xs text-slate-600 block">
+                reward_funcs <span class="text-slate-400">(comma-separated, e.g. accuracy, format)</span>
+              </label>
+              <input x-model="expDraft.rlhf.reward_funcs"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-600 block">num_generations (group size)</label>
+              <input type="number" min="2" x-model="expDraft.rlhf.num_generations"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-600 block">max_completion_length</label>
+              <input type="number" min="1" x-model="expDraft.rlhf.max_completion_length"
+                     class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+            </div>
+          </div>
         </div>
         <div>
           <label class="text-xs text-slate-600 block">hyperparameters (JSON)</label>
@@ -1319,6 +1364,34 @@
           <span x-show="!submitting">Quantize</span>
           <span x-show="submitting">Running…</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Create-pipeline modal ───────────────────────────────────── -->
+  <div x-show="pipelineCreateOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-2 sm:p-4"
+       @click.self="pipelineCreateOpen = false">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[95vh] flex flex-col">
+      <div class="px-4 sm:px-5 py-3 border-t-0 border-b flex items-center justify-between">
+        <h3 class="font-semibold">New pipeline</h3>
+        <button @click="pipelineCreateOpen = false" class="text-2xl leading-none px-2">✕</button>
+      </div>
+      <div class="p-4 sm:p-5 space-y-3 overflow-y-auto">
+        <p class="text-sm text-slate-600">
+          A <code>PipelineConfig</code>: a name + ordered <code>stages</code>. Each stage has a
+          <code>name</code>, a full <code>base_spec</code> (ExperimentSpec), optional
+          <code>depends_on</code> (stage names) and <code>input_from_stage</code> (feeds that
+          stage's adapter in as the model). The example chains SFT → DPO.
+        </p>
+        <textarea x-model="pipelineDraft" rows="20"
+                  class="w-full border rounded px-2 py-2 text-xs font-mono"></textarea>
+        <div x-show="pipelineError" class="text-sm text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="pipelineError"></div>
+      </div>
+      <div class="px-4 sm:px-5 py-3 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+        <button @click="pipelineCreateOpen = false" class="px-4 py-2 text-sm">Cancel</button>
+        <button @click="submitPipeline()" :disabled="submitting"
+                class="bg-cyan-700 text-white px-4 py-2 rounded text-sm disabled:opacity-50">Create</button>
       </div>
     </div>
   </div>
@@ -2301,6 +2374,10 @@ function trainpipe() {
     // Pipeline DAG modal state.
     pipelineDagOpen: false,
     pipelineDagModel: null,
+    // Create-pipeline modal state.
+    pipelineCreateOpen: false,
+    pipelineDraft: '',
+    pipelineError: '',
 
     // New tabs (pipelines / active-learning / watches) data + queue modal.
     pipelines: [],
@@ -2340,7 +2417,8 @@ function trainpipe() {
     submitExpOpen: false,
     expDraft: { name: '', model: 'Qwen/Qwen2.5-0.5B-Instruct', sft_type: 'lora',
                 train_kind: 'sft', gpu_count: 1, dataset: '', val_dataset: '',
-                hyperparameters: '{"num_train_epochs":1,"per_device_train_batch_size":1,"logging_steps":1,"max_length":512,"lora_rank":8}' },
+                hyperparameters: '{"num_train_epochs":1,"per_device_train_batch_size":1,"logging_steps":1,"max_length":512,"lora_rank":8}',
+                rlhf: { beta: '', reward_model: '', reward_funcs: '', num_generations: '', max_completion_length: '', temperature: '' } },
     expError: '',
 
     submitStudyOpen: false,
@@ -2501,6 +2579,25 @@ function trainpipe() {
       lines.push(ref);
       this.expDraft.dataset = lines.join('\n');
     },
+    // Assemble the rlhf payload from the form, or null when not applicable.
+    // Only non-empty fields are sent so trainer defaults apply otherwise;
+    // the server validates that PPO/GRPO carry a reward signal.
+    isRlhfKind(kind) { return ['dpo', 'kto', 'ppo', 'grpo'].includes(kind); },
+    buildRlhf() {
+      if (!this.isRlhfKind(this.expDraft.train_kind)) return null;
+      const r = this.expDraft.rlhf, out = {};
+      const num = (v) => v === '' || v === null ? null : Number(v);
+      if (r.beta !== '') out.beta = num(r.beta);
+      if (r.reward_model) out.reward_model = r.reward_model;
+      if (this.expDraft.train_kind === 'grpo') {
+        const fns = r.reward_funcs.split(',').map(s => s.trim()).filter(Boolean);
+        if (fns.length) out.reward_funcs = fns;
+        if (r.num_generations !== '') out.num_generations = num(r.num_generations);
+      }
+      if (r.max_completion_length !== '') out.max_completion_length = num(r.max_completion_length);
+      if (r.temperature !== '') out.temperature = num(r.temperature);
+      return Object.keys(out).length ? out : null;
+    },
     async submitExp() {
       this.expError = '';
       let hp;
@@ -2516,6 +2613,8 @@ function trainpipe() {
         gpu_count: this.expDraft.gpu_count,
         hyperparameters: hp,
       };
+      const rlhf = this.buildRlhf();
+      if (rlhf) spec.rlhf = rlhf;
       this.submitting = true;
       try {
         const r = await this.api('/experiments', {
@@ -3086,6 +3185,53 @@ function trainpipe() {
         this.flash('Cancelled');
         this.refreshAll();
       } catch (e) { this.flash('Cancel failed: ' + e.message); }
+    },
+    openCreatePipeline() {
+      this.pipelineError = '';
+      const example = {
+        name: 'pipeline-' + new Date().toISOString().slice(0, 10),
+        stages: [
+          {
+            name: 'sft',
+            base_spec: {
+              model: this.expDraft.model,
+              dataset: ['ds:<source-id>'],
+              train_kind: 'sft', sft_type: 'lora', gpu_count: 1,
+              hyperparameters: { num_train_epochs: 1, lora_rank: 8 },
+            },
+          },
+          {
+            name: 'dpo',
+            base_spec: {
+              model: this.expDraft.model,
+              dataset: ['ds:<preference-id>'],
+              train_kind: 'dpo', sft_type: 'lora', gpu_count: 1,
+            },
+            depends_on: ['sft'],
+            input_from_stage: 'sft',
+          },
+        ],
+      };
+      this.pipelineDraft = JSON.stringify(example, null, 2);
+      this.pipelineCreateOpen = true;
+    },
+    async submitPipeline() {
+      this.pipelineError = '';
+      let config;
+      try { config = JSON.parse(this.pipelineDraft); }
+      catch (e) { this.pipelineError = 'invalid JSON — ' + e.message; return; }
+      this.submitting = true;
+      try {
+        await this.api('/pipelines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        this.pipelineCreateOpen = false;
+        this.flash('Pipeline created');
+        this.refreshAll();
+      } catch (e) { this.pipelineError = e.message; }
+      finally { this.submitting = false; }
     },
 
     // ── watches ───────────────────────────────────────────────
