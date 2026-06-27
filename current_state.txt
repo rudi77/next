@@ -17,12 +17,16 @@ Vorgehen: pro Punkt -> implementieren -> /simplify -> committen -> dieses File u
    - swift_builder bleibt reine Translation-Schicht.
    - Tests: Flag-Emission + alle Validierungsregeln. /simplify: 2 Fixes
      (RLHF_KINDS jetzt genutzt, Nesting geglättet), 2 bewusst skipped.
-2. [IN PROGRESS] Pretraining-Pfad: 'pt' in TrainKind, swift pt-Routing,
-   Raw-Text-Format-Erkennung.
-3. [TODO] Operative CLI: trainpipe submit/list/... (parity zu MCP).
+2. [DONE] Pretraining-Pfad  — commit cb1ef30
+   - 'pt' in TrainKind; swift_builder routet auf `swift pt` (LoRA + full).
+   - is_pretrain-Erkennung (text-Feld) in dataset_formats, informativ wie
+     is_preference. /simplify: clean, 1 Vorschlag bewusst skipped.
+3. [IN PROGRESS] Operative CLI: trainpipe submit/list/... (parity zu MCP).
 4. [TODO] UI: gefuehrter Train-Wizard + Pipeline-Erstellungsformular.
 
 ## Log
 - 2026-06-27: Review abgeschlossen. Punkt 0 (MCP-Eval-Tools) gepusht (0d3716e).
 - 2026-06-27: Punkt 1 (RL/GRPO) fertig + /simplify + commit 7238b78.
   Volle Testsuite gruen (480+ Tests). Starte Punkt 2 (Pretraining).
+- 2026-06-27: Punkt 2 (Pretraining) fertig + /simplify + commit cb1ef30.
+  489 Tests gruen. Starte Punkt 3 (CLI).
