@@ -1,51 +1,61 @@
-# next / trainpipe — Implementierungsfortschritt
+# next / trainpipe — Implementierungsfortschritt: Agentic Data Acquisition
 
-Ziel: Die im Architektur-Review identifizierten Lücken gegen die Produktziele
-schließen (einfaches Training von FT/Pretraining/RL/GRPO/HP-Tuning, voll über
-UI bedienbar, CLI + MCP agent-tauglich).
+Ziel: Neues Modul `acquisition` bauen, das aus einem natürlichsprachigen
+Auftrag ein Trainingsset konstruiert (Recherche → Web-Akquise → Synthese →
+Curation → Register). Design-Doc: docs/spec/agentic-data-acquisition.md.
 
-Branch: claude/simplify-b94tk5
-Vorgehen: pro Punkt -> implementieren -> /simplify -> committen -> dieses File updaten.
+Branch: claude/nextjs-capabilities-ole3jb
+Vorgehen: pro Stufe -> implementieren -> /simplify -> committen -> dieses File updaten.
 
-## Status: ALLE PUNKTE ABGESCHLOSSEN ✅
+## Plan (4 Stufen aus dem Design-Doc §12)
 
-0. [DONE] MCP-Eval-Tools (train->eval->improve-Loop fuer Agents)  — commit 0d3716e
-   - 10 Eval-Tools im MCP (create_eval_suite, run_eval, get_eval_results,
-     compare_evals, ...). Schliesst den Agent-Loop.
+1. [DONE] MVP-Gerüst: Modul + acquisition_runs-Migration + Route + MCP-Tool +
+       Driver/Manager mit Mock-Providern; Phasen Intake, Synthesize
+       (from-scratch), Curate (Dedup+Validate), Register. Noch ohne echtes Web.
+2. [DONE] Async-Klärung: awaiting_input + PATCH …/answers.
+       (Kam mit Stufe 1, weil intrinsisch zur State-Machine.)
+3. [ ] Research/Acquire real: SearchProvider (Tavily) + Extractor + Lizenz-/
+       robots-Checks; [acquisition]-Extra.
+4. [ ] Härtung: Redaction-Pflichtstufe, Cost-Budget, Lineage-Snapshots, UI-Tab.
 
-1. [DONE] RL/GRPO erstklassig  — commit 7238b78
-   - RLHFHyperparameters (beta, reward_model, reward_funcs, num_generations,
-     max_completion_length, temperature) -> swift rlhf-Flags.
-   - ExperimentSpec._check_rlhf-Validator: reward-Signal fuer ppo/grpo am
-     Submit erzwungen; GRPO-only-Knobs gekapselt; rlhf fuer non-RLHF verboten.
-   - swift_builder bleibt reine Translation-Schicht.
+## Was steht (Stufe 1+2)
 
-2. [DONE] Pretraining-Pfad  — commit cb1ef30
-   - 'pt' in TrainKind; swift_builder routet auf `swift pt` (LoRA + full).
-   - is_pretrain-Erkennung (text-Feld) in dataset_formats, informativ.
+- Migration v14: acquisition_runs + acquisition_sources (db.py).
+- Schemas: AcquisitionStatus/Phase/Spec/Source/Request/Answers/Run +
+  ACQUISITION_TERMINAL_STATUSES (api/schemas.py).
+- Repository: create/get/list/list_active/update_acquisition_run +
+  record/list_acquisition_sources (core/repository.py).
+- Modul trainpipe/acquisition/: runner.py (Phasen: intake, synthesize,
+  curate, write_records_jsonl — reuse synth.SynthProvider), driver.py
+  (In-Process-Phasen-Task, awaiting_input-Pause/Resume), manager.py
+  (Lifecycle + answer/cancel + _remove_driver).
+- Route api/routes/acquisitions.py: POST / GET-list / GET-one /
+  GET-sources / PATCH answers (404/409) / POST cancel.
+- MCP: start/get/list/answer/cancel_acquisition (mcp.py).
+- Wiring: deps.get_acquisition_manager, main.py lifespan + router include.
+- Tests: tests/test_phase22_acquisition.py (18 Tests: pure functions,
+  driver end-to-end, awaiting_input-Resume, manager, REST).
 
-3. [DONE] Operative CLI  — commit b075e45
-   - trainpipe/client.py (shared httpx-Client + unwrap), von CLI UND MCP genutzt.
-   - trainpipe/cli.py: serve (default) + voller Satz operativer Subcommands
-     (submit/experiments/get/cancel/logs/datasets/upload/models/register-model/
-     set-alias/inference/studies/gpus/eval-* /run-eval/compare-evals) plus
-     generischer `api METHOD PATH` fuer volle Parity. JSON-Ausgabe.
+## Verifikation (Stufe 1+2)
 
-4. [DONE] UI  — commit e372846
-   - Experiment-Form: 'pt'-Trainingstyp + bedingtes RL/Preference-Panel
-     (beta, reward_model, reward_funcs, num_generations, max_completion_length,
-     temperature) fuer die rlhf-Familie; buildRlhf() schickt nur gesetzte Felder.
-   - Pipelines-Tab: "New pipeline"-Modal mit SFT->DPO-Beispiel (PipelineConfig).
+- Volle Testsuite grün: 522 passed, 1 skipped.
+- ruff sauber auf allen neuen/geänderten Dateien (41 pre-existing
+  Repo-Fehler in fremden Dateien unberührt).
+- /simplify durchlief 4 Cleanup-Agents; 7 Findings angewendet
+  (Terminal-Set zentralisiert, _fallback_domain, JSON-Extract vereinfacht,
+  _remove_driver-Helper, Provider 1×, datengetriebener Updater, Manager
+  gibt Run zurück → Routes ohne Re-Read). Cross-Modul-Reuse + Design-
+  Entscheidungen bewusst übersprungen.
 
-## Verifikation
-- Volle Testsuite gruen: 507 Tests.
-- ruff sauber auf allen geaenderten Dateien (41 pre-existing Repo-Fehler unberuehrt).
-- UI-Inline-JS via `node --check` validiert.
-- Jeder Punkt durchlief /simplify (4 Cleanup-Agents) vor dem Commit.
+## Bekannte Folgearbeit (für Stufe 3/4 bzw. globale Cleanups)
+
+- Reuse: synth.generate_synthetic Failure-Loop und JSON-Extract aus
+  evals/metrics/llm_as_judge konsolidieren (modulübergreifend).
+- Effizienz: httpx.Client in synth-Providern pro Call neu gebaut → pooling.
+- Altitude: ggf. recover_stale_runs-Funktion analog active_learning, falls
+  Resume-Posture strenger werden soll.
 
 ## Log
-- 2026-06-27: Review abgeschlossen. Punkt 0 (MCP-Eval-Tools) gepusht (0d3716e).
-- 2026-06-27: Punkt 1 (RL/GRPO) + /simplify + commit 7238b78.
-- 2026-06-27: Punkt 2 (Pretraining) + /simplify + commit cb1ef30.
-- 2026-06-27: Punkt 3 (CLI) + /simplify + commit b075e45.
-- 2026-06-27: Punkt 4 (UI) + /simplify + commit e372846. Alle Punkte fertig.
+
+- 2026-06-27: Design-Doc committet (docs/spec/agentic-data-acquisition.md).
+- 2026-06-27: Stufe 1+2 implementiert + /simplify + Commit folgt.

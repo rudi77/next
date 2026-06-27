@@ -6,6 +6,7 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
+from ..acquisition.manager import AcquisitionManager
 from ..autoresearch.manager import StudyManager
 from ..core.db import Database
 from ..evals.dispatcher import EvalDispatcher
@@ -16,6 +17,7 @@ from ..scheduler.loop import Scheduler
 from ..settings import settings
 from ..watches.manager import WatchManager
 from .routes import (
+    acquisitions,
     active_learning,
     compliance,
     datasets,
@@ -88,6 +90,9 @@ async def lifespan(app: FastAPI):
     watch_manager = WatchManager(db, pipeline_manager)
     await watch_manager.start()
 
+    acquisition_manager = AcquisitionManager(db)
+    await acquisition_manager.start_existing()
+
     app.state.db = db
     app.state.gpu_pool = gpu_pool
     app.state.scheduler = scheduler
@@ -96,10 +101,12 @@ async def lifespan(app: FastAPI):
     app.state.inference_service = inference_service
     app.state.pipeline_manager = pipeline_manager
     app.state.watch_manager = watch_manager
+    app.state.acquisition_manager = acquisition_manager
 
     try:
         yield
     finally:
+        await acquisition_manager.stop_all()
         await watch_manager.stop()
         await pipeline_manager.stop_all()
         await inference_service.close_all()
@@ -139,3 +146,4 @@ app.include_router(pipelines.router)
 app.include_router(synth.router)
 app.include_router(watches.router)
 app.include_router(compliance.router)
+app.include_router(acquisitions.router)

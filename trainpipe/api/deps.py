@@ -1,5 +1,6 @@
 from fastapi import Request
 
+from ..acquisition.manager import AcquisitionManager
 from ..autoresearch.manager import StudyManager
 from ..core.db import Database
 from ..evals.dispatcher import EvalDispatcher
@@ -35,3 +36,7 @@ def get_inference_service(request: Request) -> InferenceService:
 
 def get_pipeline_manager(request: Request) -> PipelineManager:
     return request.app.state.pipeline_manager
+
+
+def get_acquisition_manager(request: Request) -> AcquisitionManager:
+    return request.app.state.acquisition_manager

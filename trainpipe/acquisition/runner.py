@@ -1,0 +1,288 @@
+"""Pure phase logic for agentic data acquisition — no DB, no asyncio.
+
+Each function here maps to one phase of the design doc and is independently
+testable. The :class:`AcquisitionDriver` orchestrates them and owns all the
+persistence. We reuse ``synth.runner``'s provider abstraction (Anthropic /
+OpenAI / Mock) rather than re-implementing LLM calls — the only difference
+from ``synth`` is that acquisition has no source dataset to expand, so it
+*generates* records from the spec instead of transforming source records.
+
+Robustness note: both intake and synthesize ask the LLM for JSON and parse
+it, but neither *depends* on the model returning well-formed JSON. When a
+reply can't be parsed (the ``mock`` provider returns prose, a real model
+rambles) we fall back to a deterministic value derived from the spec. That
+keeps the MVP fully exercisable end-to-end with ``provider=mock`` and no
+network — a real dataset comes out either way.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from pathlib import Path
+from typing import Any
+
+from ..api.schemas import AcquisitionSpec
+from ..synth.runner import FatalHTTPError, SynthAborted, SynthProvider
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# JSON extraction
+# ---------------------------------------------------------------------------
+
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Best-effort: pull the first ``{...}`` block out of an LLM reply and
+    parse it. Returns ``None`` if nothing parseable is found — callers fall
+    back to a deterministic value rather than failing the run.
+
+    The greedy ``\\{.*\\}`` (DOTALL) span covers the pure-JSON case too: on a
+    reply that is *only* the object it matches the whole string, so there's
+    no need for a separate fast path."""
+    if not text:
+        return None
+    m = _JSON_OBJECT_RE.search(text)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Intake
+# ---------------------------------------------------------------------------
+
+_INTAKE_PROMPT = """\
+You are planning a dataset to fine-tune an LLM. Turn the operator's brief
+into a JSON object with exactly these keys:
+  "domain": short domain label (string),
+  "locales": list of BCP-47 locales the data should cover,
+  "target_capabilities": list of things the model should be able to do,
+  "out_of_scope": list of things the model must NOT do,
+  "format": one of "sft", "dpo", "chat", "completion",
+  "open_questions": list of clarifying questions you'd ask before starting
+                    (empty list if the brief is already clear enough).
+Reply with ONLY the JSON object, no prose.
+
+Brief: {brief}
+"""
+
+
+def _fallback_domain(brief: str) -> str:
+    """A serviceable domain label from the brief's leading words."""
+    return " ".join(brief.strip().split()[:6]) or "general"
+
+
+def _fallback_spec(brief: str, target_count: int) -> AcquisitionSpec:
+    """Deterministic spec when the intake LLM gives us nothing parseable.
+
+    Domain = the brief's leading words; no open questions (so the run flows
+    straight through). Good enough to demo the pipeline with ``mock``."""
+    return AcquisitionSpec(
+        domain=_fallback_domain(brief),
+        locales=[],
+        target_capabilities=[],
+        out_of_scope=[],
+        format="sft",
+        target_count=target_count,
+        open_questions=[],
+    )
+
+
+def intake_spec(
+    provider: SynthProvider,
+    *,
+    model: str,
+    brief: str,
+    target_count: int,
+    max_tokens: int = 1024,
+) -> AcquisitionSpec:
+    """Phase 1: brief → structured :class:`AcquisitionSpec`.
+
+    Always returns a spec; never raises on a bad/empty LLM reply (falls back
+    to :func:`_fallback_spec`). ``target_count`` from the request wins over
+    anything the model invents, so the operator stays in control of volume.
+    """
+    prompt = _INTAKE_PROMPT.format(brief=brief)
+    try:
+        raw = provider.generate(prompt, model=model, max_tokens=max_tokens)
+    except Exception:  # network / provider error — degrade, don't crash intake
+        logger.warning("acquisition intake: provider call failed, using fallback")
+        return _fallback_spec(brief, target_count)
+
+    obj = _extract_json_object(raw)
+    if obj is None:
+        return _fallback_spec(brief, target_count)
+
+    def _str_list(key: str) -> list[str]:
+        v = obj.get(key)
+        return [str(x) for x in v] if isinstance(v, list) else []
+
+    fmt = obj.get("format")
+    if fmt not in ("sft", "dpo", "chat", "completion"):
+        fmt = "sft"
+    return AcquisitionSpec(
+        domain=str(obj.get("domain") or _fallback_domain(brief)),
+        locales=_str_list("locales"),
+        target_capabilities=_str_list("target_capabilities"),
+        out_of_scope=_str_list("out_of_scope"),
+        format=fmt,
+        target_count=target_count,
+        open_questions=_str_list("open_questions"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b — Synthesize (from-scratch, no source dataset)
+# ---------------------------------------------------------------------------
+
+_SYNTH_PROMPT = """\
+Generate ONE realistic training example for fine-tuning a model in the
+domain "{domain}".
+Locales: {locales}
+The model should be able to: {capabilities}
+The model must NOT: {out_of_scope}
+{answers}
+Reply with ONLY a JSON object of the form
+  {{"prompt": <the user request>, "completion": <the ideal answer>}}
+Make example #{index} distinct from the others.
+"""
+
+
+def _spec_synth_prompt(
+    spec: AcquisitionSpec, index: int, answers: dict[str, str] | None
+) -> str:
+    answer_block = ""
+    if answers:
+        joined = "; ".join(f"{q} -> {a}" for q, a in answers.items())
+        answer_block = f"Operator clarifications: {joined}\n"
+    return _SYNTH_PROMPT.format(
+        domain=spec.domain,
+        locales=", ".join(spec.locales) or "any",
+        capabilities=", ".join(spec.target_capabilities) or "general competence",
+        out_of_scope=", ".join(spec.out_of_scope) or "(no explicit limits)",
+        answers=answer_block,
+        index=index + 1,
+    )
+
+
+def _fallback_record(spec: AcquisitionSpec, index: int) -> dict[str, str]:
+    """Deterministic prompt/completion when a reply isn't parseable JSON."""
+    return {
+        "prompt": f"[{spec.domain}] Beispielaufgabe #{index + 1}",
+        "completion": (
+            f"Beispielantwort #{index + 1} für die Domäne {spec.domain}."
+        ),
+    }
+
+
+def _parse_record(raw: str, spec: AcquisitionSpec, index: int) -> dict[str, str]:
+    obj = _extract_json_object(raw)
+    if (
+        obj is not None
+        and isinstance(obj.get("prompt"), str)
+        and isinstance(obj.get("completion"), str)
+        and obj["prompt"]
+        and obj["completion"]
+    ):
+        return {"prompt": obj["prompt"], "completion": obj["completion"]}
+    return _fallback_record(spec, index)
+
+
+def synthesize_records(
+    provider: SynthProvider,
+    *,
+    model: str,
+    spec: AcquisitionSpec,
+    answers: dict[str, str] | None = None,
+    max_tokens: int = 1024,
+    max_consecutive_failures: int = 5,
+    should_stop=None,
+) -> list[dict[str, str]]:
+    """Phase 3b: generate ``spec.target_count`` records from the spec.
+
+    Mirrors ``synth.generate_synthetic``'s failure model: a
+    :class:`FatalHTTPError` (bad key / malformed request) or
+    ``max_consecutive_failures`` provider errors in a row trip
+    :class:`SynthAborted` so a wedged provider can't burn through the whole
+    target in a tight loop. Parse failures are *not* errors — they fall back
+    to a deterministic record. ``should_stop`` is an optional callable polled
+    between records so the driver can cancel mid-phase.
+    """
+    records: list[dict[str, str]] = []
+    consecutive_failures = 0
+    for i in range(spec.target_count):
+        if should_stop is not None and should_stop():
+            break
+        prompt = _spec_synth_prompt(spec, i, answers)
+        try:
+            raw = provider.generate(prompt, model=model, max_tokens=max_tokens)
+        except FatalHTTPError as e:
+            raise SynthAborted(
+                f"provider returned fatal error: {e}. Aborting after "
+                f"{len(records)} records."
+            ) from None
+        except Exception as e:
+            consecutive_failures += 1
+            logger.warning(
+                "acquisition synth: provider call failed (%d/%d): %s",
+                consecutive_failures,
+                max_consecutive_failures,
+                e,
+            )
+            if consecutive_failures >= max_consecutive_failures:
+                raise SynthAborted(
+                    f"{consecutive_failures} consecutive provider failures "
+                    f"(last: {e}). Aborting after {len(records)} records."
+                ) from None
+            continue
+        consecutive_failures = 0
+        records.append(_parse_record(raw, spec, i))
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Curate
+# ---------------------------------------------------------------------------
+
+
+def curate(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Phase 4 (MVP slice): exact-duplicate dedup.
+
+    Returns ``(curated, dropped)``. Dedup key is the normalized
+    (prompt, completion) pair — near-dup detection, language/quality filters
+    and PII-redaction join here in the hardening phase. Order is preserved so
+    the output is reproducible.
+    """
+    seen: set[tuple[str, str]] = set()
+    curated: list[dict[str, Any]] = []
+    dropped = 0
+    for rec in records:
+        key = (
+            str(rec.get("prompt", "")).strip(),
+            str(rec.get("completion", "")).strip(),
+        )
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        curated.append(rec)
+    return curated, dropped
+
+
+def write_records_jsonl(records: list[dict[str, Any]], path: Path) -> int:
+    """Write records as JSONL. Returns the count written."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False))
+            f.write("\n")
+    return len(records)
