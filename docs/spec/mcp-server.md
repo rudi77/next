@@ -23,6 +23,7 @@ ein dünner Wrapper um die REST-API: er hält einen httpx-Client mit dem
 - Datasets: hochladen (base64), auflisten, abrufen, Vorschau, löschen
 - Modelle: registrieren, auflisten, auflösen, Alias umhängen, löschen
 - Inferenz: einen Prompt schicken (`inference`) und zwei Modelle vergleichen (`inference_compare`)
+- Evals: Suites anlegen/auflisten/abrufen/löschen, Runs starten/auflisten/abrufen, Per-Sample-Ergebnisse lesen, Runs abbrechen und vergleichen (`create_eval_suite`, `list_eval_suites`, `get_eval_suite`, `delete_eval_suite`, `run_eval`, `list_eval_runs`, `get_eval_run`, `get_eval_results`, `cancel_eval_run`, `compare_evals`) — schließt die train→eval→improve-Schleife für Agenten
 - Synthetische Daten aus einem Teacher-LLM generieren (`synth_dataset`)
 - Compliance: betroffene Datasets/Modelle für „Recht auf Löschung" scannen (`forget_scan`)
 - Den Server standalone betreiben (`python -m trainpipe.mcp` / `trainpipe-mcp`)
@@ -47,7 +48,10 @@ ein dünner Wrapper um die REST-API: er hält einen httpx-Client mit dem
   `tail_logs`, `submit_study`, `list_studies`, `get_study`, `cancel_study`, `gpu_status`,
   `upload_dataset`, `list_datasets`, `get_dataset`, `preview_dataset`, `delete_dataset`,
   `register_model`, `list_models`, `get_model`, `set_alias`, `delete_model`,
-  `inference`, `inference_compare`, `synth_dataset`, `forget_scan`
+  `inference`, `inference_compare`, `synth_dataset`, `forget_scan`,
+  `create_eval_suite`, `list_eval_suites`, `get_eval_suite`, `delete_eval_suite`,
+  `run_eval`, `list_eval_runs`, `get_eval_run`, `get_eval_results`,
+  `cancel_eval_run`, `compare_evals`
 
 ## Configuration surface (Schlüssel/Env-Vars für Betreiber)
 
