@@ -9,12 +9,20 @@ Vorgehen: pro Punkt -> implementieren -> /simplify -> committen -> dieses File u
 
 ## Punkteliste
 0. [DONE] MCP-Eval-Tools (train->eval->improve-Loop fuer Agents)  — commit 0d3716e
-1. [IN PROGRESS] RL/GRPO erstklassig: RLHFHyperparameters (reward_model, beta,
-   KL, group_size), Dataset-Validierung, swift_builder-Emission, E2E-Test.
-2. [TODO] Pretraining-Pfad: 'pt' in TrainKind, swift pt-Routing, Raw-Text-Format.
+1. [DONE] RL/GRPO erstklassig  — commit 7238b78
+   - RLHFHyperparameters (beta, reward_model, reward_funcs, num_generations,
+     max_completion_length, temperature) -> swift rlhf-Flags.
+   - ExperimentSpec._check_rlhf-Validator: reward-Signal fuer ppo/grpo am
+     Submit erzwungen; GRPO-only-Knobs gekapselt; rlhf fuer non-RLHF verboten.
+   - swift_builder bleibt reine Translation-Schicht.
+   - Tests: Flag-Emission + alle Validierungsregeln. /simplify: 2 Fixes
+     (RLHF_KINDS jetzt genutzt, Nesting geglättet), 2 bewusst skipped.
+2. [IN PROGRESS] Pretraining-Pfad: 'pt' in TrainKind, swift pt-Routing,
+   Raw-Text-Format-Erkennung.
 3. [TODO] Operative CLI: trainpipe submit/list/... (parity zu MCP).
 4. [TODO] UI: gefuehrter Train-Wizard + Pipeline-Erstellungsformular.
 
 ## Log
-- 2026-06-27: Review abgeschlossen. Punkt 0 (MCP-Eval-Tools) bereits umgesetzt
-  und gepusht (commit 0d3716e). Starte Punkt 1 (RL/GRPO).
+- 2026-06-27: Review abgeschlossen. Punkt 0 (MCP-Eval-Tools) gepusht (0d3716e).
+- 2026-06-27: Punkt 1 (RL/GRPO) fertig + /simplify + commit 7238b78.
+  Volle Testsuite gruen (480+ Tests). Starte Punkt 2 (Pretraining).
