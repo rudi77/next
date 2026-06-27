@@ -1,6 +1,6 @@
 # trainpipe / next — Benutzerhandbuch
 
-> **Stand:** 2026-05-30 · **Sprache der Doku:** Deutsch · **Sprache der API:** Englisch (Bezeichner unverändert)
+> **Stand:** 2026-06-27 · **Sprache der Doku:** Deutsch · **Sprache der API:** Englisch (Bezeichner unverändert)
 
 Dieses Dokument erklärt **was** trainpipe ist, **wofür** du es einsetzt, **wie**
 du jedes einzelne Feature benutzt — und wie ein **Agent** (Claude Code,
@@ -36,18 +36,21 @@ die ausführliche Anleitung dazwischen.
 18. [Agent-Integration](#18-agent-integration)
 19. [Konfiguration & Settings](#19-konfiguration--settings)
 20. [Troubleshooting](#20-troubleshooting)
+21. [Data Acquisition — Datensatz aus einem Auftrag](#21-data-acquisition--datensatz-aus-einem-auftrag)
+22. [CLI — Der `trainpipe`-Terminal-Client](#22-cli--der-trainpipe-terminal-client)
 
 ---
 
 ## 1. Was ist trainpipe?
 
 trainpipe (Codename **next**) ist eine **Trainings-Orchestrierung für einen
-einzelnen Linux-Host mit 1–N NVIDIA-GPUs**. Du wirfst Fine-Tuning-Jobs
-hinein (ms-swift, also LoRA, QLoRA, Full-FT, LongLoRA, AdaLoRA, IA3),
-trainpipe verwaltet die Warteschlange, allokiert GPUs, streamt Logs nach
-MLflow und speichert alles in SQLite. Eine REST-API ist die einzige
+einzelnen Linux-Host mit 1–N NVIDIA-GPUs**. Du wirfst Jobs hinein (ms-swift):
+**Supervised Fine-Tuning** (LoRA, QLoRA, Full-FT, LongLoRA, AdaLoRA, IA3),
+**(Continued) Pretraining** und **Preference/RL-Training** (DPO, KTO, PPO,
+GRPO). trainpipe verwaltet die Warteschlange, allokiert GPUs, streamt Logs
+nach MLflow und speichert alles in SQLite. Eine REST-API ist die einzige
 Eingangstür — sowohl für Menschen (über die Web-UI) als auch für Agenten
-(über MCP oder direkt mit `curl`).
+(über MCP oder den `trainpipe`-CLI-Client, siehe Kapitel 22).
 
 ### Wofür ist es gut?
 
@@ -61,6 +64,9 @@ Eingangstür — sowohl für Menschen (über die Web-UI) als auch für Agenten
   versionierte API erreichbar.
 - **Du willst Datasets, Evals und Modelle als erstklassige Ressourcen
   pflegen**, mit Versionierung, Aliasen, Lineage und Audit-Trail.
+- **Du hast noch gar keine Trainingsdaten.** Die agentische
+  Data-Acquisition (Kapitel 21) baut dir aus einem Auftrag in
+  natürlicher Sprache einen registrierten, PII-bereinigten Datensatz.
 - **Du brauchst Compliance-Werkzeuge** — PII-Redaktion, GDPR-Scan,
   Lineage-Queries („welche Modelle haben auf diesen Daten trainiert?").
 
@@ -416,16 +422,87 @@ Wichtige Felder:
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `model` | str | HF-ID, ms-swift-Shortcut oder lokaler Pfad |
+| `train_kind` | enum | `sft` (Default) / `pt` / `dpo` / `kto` / `ppo` / `grpo` — siehe 5.1.1 |
 | `sft_type` | enum | `lora` / `qlora` / `full` / `longlora` / `adalora` / `ia3` |
-| `dataset`, `val_dataset` | list[str] | Refs (siehe Kapitel 2) |
+| `dataset`, `val_dataset` | list[str] | Refs (siehe Kapitel 2); `dataset` braucht ≥ 1 Eintrag |
 | `gpu_count` | int 1–8 | **Hardlimit 8** pro Job; größeres → 422 |
 | `lora_target_modules` | list[str] | Standard sind ms-swift-Defaults |
-| `hyperparameters` | dict | Wird 1:1 an ms-swift weitergereicht |
+| `hyperparameters` | dict | Standard-Trainings-Knöpfe (LR, Epochen, LoRA-Rank …) |
+| `rlhf` | dict \| null | Preference/RL-Knöpfe — **nur** bei `train_kind ∈ {dpo,kto,ppo,grpo}` |
 | `tags.mlflow_experiment` | str | Gruppen-Name in der MLflow-UI |
 | `priority` | int | Höher = früher dran; Default 0 |
+| `auto_eval` | list[str] | Suite-IDs, die nach Trainingsende automatisch laufen |
 
 > **Tipp für Agenten:** Halte `priority` agent-submittierter Jobs auf
 > 0 oder negativ, sodass ein Mensch jederzeit dazwischenfunken kann.
+
+### 5.1.1 Trainingsart wählen: `train_kind`
+
+`train_kind` entscheidet, welches ms-swift-Unterkommando trainpipe startet.
+Default ist `sft` (Instruction-Tuning). `swift_builder` übersetzt das intern —
+du fasst nie ms-swift-Flags an.
+
+| `train_kind` | ms-swift | Wofür |
+|---|---|---|
+| `sft` | `swift sft` | Supervised Fine-Tuning (Default) |
+| `pt` | `swift pt` | (Continued) Pretraining auf Rohtext |
+| `dpo` | `swift rlhf --rlhf_type dpo` | Direct Preference Optimization |
+| `kto` | `swift rlhf --rlhf_type kto` | KTO-Preference-Tuning |
+| `ppo` | `swift rlhf --rlhf_type ppo` | PPO (braucht Reward-Model) |
+| `grpo` | `swift rlhf --rlhf_type grpo` | Group Relative Policy Optimization |
+
+**Continued Pretraining** (`train_kind: "pt"`) — Rohtext statt Chat-Format,
+kein `rlhf`-Block:
+
+```bash
+curl -X POST http://localhost:8080/experiments \
+  -H "X-API-Key: $K" -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen2.5-0.5B",
+    "train_kind": "pt",
+    "sft_type": "full",
+    "dataset": ["ds:corpus01"],
+    "gpu_count": 1
+  }'
+```
+
+**RL / Preference** (`dpo`/`kto`/`ppo`/`grpo`) — der optionale `rlhf`-Block
+trägt die RL-spezifischen Knöpfe. Beispiel GRPO mit eingebauten
+Reward-Funktionen:
+
+```bash
+curl -X POST http://localhost:8080/experiments \
+  -H "X-API-Key: $K" -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "train_kind": "grpo",
+    "dataset": ["ds:rl-prompts"],
+    "rlhf": {
+      "reward_funcs": ["accuracy", "format"],
+      "num_generations": 8,
+      "beta": 0.04,
+      "temperature": 0.9,
+      "max_completion_length": 512
+    }
+  }'
+```
+
+`rlhf`-Felder (alle optional, außer wo unten gefordert):
+
+| Feld | Gilt für | Bedeutung |
+|---|---|---|
+| `beta` ≥ 0 | dpo, kto, grpo | KL-Regularisierung |
+| `reward_model` | ppo, grpo | Reward-Model-Pfad/-ID; **Pflicht bei ppo** |
+| `reward_funcs` | **nur** grpo | Eingebaute Reward-Funktionen, z. B. `["accuracy","format"]` |
+| `num_generations` ≥ 2 | **nur** grpo | Completions pro Prompt (Gruppengröße) |
+| `max_completion_length` ≥ 1 | grpo, ppo | Rollout-Länge |
+| `temperature` 0–2 | grpo, ppo | Sampling-Temperatur der Rollouts |
+
+Die Validierung ist streng (sonst 422):
+- `rlhf` darf **nur** bei einem RL-/Preference-`train_kind` gesetzt sein.
+- `reward_funcs` / `num_generations` sind **GRPO-only**.
+- `ppo` braucht `rlhf.reward_model`; `grpo` braucht `reward_model` **oder**
+  `reward_funcs`.
 
 ### 5.2 Batch-Submit (atomar)
 
@@ -1117,22 +1194,28 @@ claude mcp add trainpipe -- env \
 - **Timeouts** — `httpx` connect 5 s, read 30 s; Fehler werden als
   `RuntimeError("HTTP <code>: <detail>")` an den Agenten zurückgegeben.
 
-#### Tool-Übersicht (25 Stück)
+#### Tool-Übersicht (40 Stück)
 
 | Bereich | Tools |
 |---|---|
 | Experiments | `submit_experiment`, `get_experiment`, `list_experiments`, `cancel_experiment`, `tail_logs` |
 | Studies | `submit_study`, `list_studies`, `get_study`, `cancel_study` |
-| Datasets | `upload_dataset`, `list_datasets`, `get_dataset`, `preview_dataset`, `delete_dataset` |
+| Datasets | `upload_dataset`, `list_datasets`, `get_dataset`, `preview_dataset`, `delete_dataset`, `synth_dataset` |
 | Models | `register_model`, `list_models`, `get_model`, `set_alias`, `delete_model` |
 | Inference | `inference`, `inference_compare` |
-| Synth | `synth_dataset` |
+| Evals | `create_eval_suite`, `list_eval_suites`, `get_eval_suite`, `delete_eval_suite`, `run_eval`, `list_eval_runs`, `get_eval_run`, `get_eval_results`, `cancel_eval_run`, `compare_evals` |
+| Acquisition | `start_acquisition`, `get_acquisition`, `get_acquisition_sources`, `list_acquisitions`, `answer_acquisition`, `cancel_acquisition` |
 | GPU | `gpu_status` |
 | Compliance | `forget_scan` |
 
 Datasets per MCP zu uploaden bedeutet `content_b64` — Base64-Encoded.
 Für Dateien > ~10 MB lieber direkt per `curl -F file=@…` an die REST-API
 gehen.
+
+> Die Eval-Tools schließen die Agenten-Schleife **train → eval → improve**:
+> der Agent trainiert, misst gegen eine Suite, vergleicht Runs und
+> entscheidet selbst über den nächsten Schritt. Die Acquisition-Tools
+> setzen noch eine Stufe davor an — **Daten beschaffen → train** (Kapitel 21).
 
 ### 18.3 Variante C — Autoresearch-Loop
 
@@ -1368,6 +1451,202 @@ curl -s -H "X-API-Key: $K" "$URL/datasets" | \
   jq -r '.[] | select(.name|startswith("smoke-")) | .id' | \
   xargs -I{} curl -s -X DELETE -H "X-API-Key: $K" "$URL/datasets/{}?force=true"
 ```
+
+---
+
+## 21. Data Acquisition — Datensatz aus einem Auftrag
+
+Die übrigen Kapitel setzen voraus, dass du **schon** Trainingsdaten hast.
+Die agentische **Data Acquisition** dreht das um: du gibst einen Auftrag in
+natürlicher Sprache (*„Trainingsdaten für einen Buchhaltungs-LLM für den
+DACH-Raum"*), und trainpipe baut daraus einen **registrierten,
+PII-bereinigten Datensatz** — am Ende bekommst du eine ganz normale
+`ds:<id>`-Referenz, die du sofort in einem Experiment (Kapitel 5) benutzt.
+
+### 21.1 Die Phasen eines Acquisition-Runs
+
+Ein Run läuft durch eine feste Phasenmaschine:
+
+```
+intake → research → acquire → synthesize → curate → register
+```
+
+| Phase | Was passiert |
+|---|---|
+| **intake** | Der Auftrag (`brief`) wird in einen strukturierten `AcquisitionSpec` (Domäne, Fähigkeiten, Format) übersetzt. Bleiben Rückfragen offen, parkt der Run in `awaiting_input`. |
+| **research** | Nur wenn `search_provider != "none"`: Web-Suchanfragen → Kandidaten-URLs → Lizenz-/robots.txt-Prüfung → Quellen-Ledger. |
+| **acquire** | Erlaubte Quellen abrufen, per LLM zu belegten Records destillieren. |
+| **synthesize** | Restliche Records aus dem Spec generieren, bis `target_count` erreicht ist. |
+| **curate** | **Pflicht-PII-Redaktion** (rekursiv) + exakte Dedup nach (prompt, completion). |
+| **register** | JSONL in die Dataset-Registry schreiben (sha256-Dedup), `dataset_id` zurückgeben. |
+
+Status-Werte: `queued` → `running` → (`awaiting_input` ↔) →
+`completed` / `failed` / `cancelled`.
+
+### 21.2 Run starten
+
+```bash
+curl -X POST http://localhost:8080/acquisitions \
+  -H "X-API-Key: $K" -H "Content-Type: application/json" \
+  -d '{
+    "name": "dach-accounting-sft",
+    "brief": "Trainingsdaten für einen Buchhaltungs-LLM für den DACH-Raum",
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
+    "target_count": 500,
+    "search_provider": "tavily",
+    "max_sources": 10,
+    "strict_license": true,
+    "max_llm_calls": 2000
+  }'
+# → AcquisitionRun (status "queued")
+```
+
+Felder von `AcquisitionRequest`:
+
+| Feld | Typ | Default | Bedeutung |
+|---|---|---|---|
+| `name` | str | — | Name des entstehenden Datensatzes (Pflicht) |
+| `brief` | str | — | Auftrag in natürlicher Sprache (Pflicht) |
+| `provider` | enum | `mock` | Teacher-LLM: `anthropic` / `openai` / `mock` (offline) |
+| `model` | str | `mock` | Modell-ID des Teacher-LLM |
+| `target_count` | int 1–100000 | 50 | Ziel-Datensatzgröße |
+| `search_provider` | enum | `none` | `none` (nur synthetisieren, kein Netz) / `mock` / `tavily` |
+| `max_sources` | int 0–50 | 5 | Obergrenze entdeckter Quellen-URLs |
+| `strict_license` | bool | `false` | **Guardrail:** Quellen mit unklarer Lizenz überspringen |
+| `max_llm_calls` | int | 0 | **Kostenbudget:** Cap auf Teacher-LLM-Calls (0 = unbegrenzt) |
+| `spec` | obj \| null | null | Vorausgefüllter `AcquisitionSpec` — überspringt `intake` |
+
+### 21.3 Rückfragen beantworten (Human-in-the-Loop)
+
+Wenn `intake` offene Fragen hat und keine Antworten vorliegen, parkt der Run
+in `awaiting_input`. Die Fragen stehen in `spec.open_questions`. Du
+beantwortest sie, der Driver läuft weiter:
+
+```bash
+# Aktuellen Stand inkl. open_questions ansehen
+curl -H "X-API-Key: $K" http://localhost:8080/acquisitions/<run_id>
+
+# Antworten (Keys = Fragetext)
+curl -X PATCH http://localhost:8080/acquisitions/<run_id>/answers \
+  -H "X-API-Key: $K" -H "Content-Type: application/json" \
+  -d '{"answers": {"Welche Sprachen?": "de-DE, de-AT, de-CH"}}'
+# 409, wenn der Run nicht in awaiting_input steht
+```
+
+Ein **Agent** kann das Parken ganz vermeiden, indem er einen vorausgefüllten
+`spec` (mit beantworteten `open_questions`) direkt an `start_acquisition`
+übergibt.
+
+### 21.4 Fortschritt, Quellen, Cancel
+
+```bash
+# Detail: phase, raw_count, final_count, redaction-Trefferzahlen, dataset_id
+curl -H "X-API-Key: $K" http://localhost:8080/acquisitions/<run_id>
+
+# Geprüfte Web-Quellen (Audit-Trail; inkl. abgelehnter)
+curl -H "X-API-Key: $K" http://localhost:8080/acquisitions/<run_id>/sources
+
+# Liste (Filter optional)
+curl -H "X-API-Key: $K" "http://localhost:8080/acquisitions?status=running"
+
+# Abbrechen
+curl -X POST -H "X-API-Key: $K" \
+  http://localhost:8080/acquisitions/<run_id>/cancel
+```
+
+Ist der Run `completed`, trägt `dataset_id` die fertige `ds:<id>`-Referenz —
+der Datensatz steht mit Provenienz (Provider, Modell, Domäne, Run-ID in der
+Beschreibung) in der Registry und ist sofort trainierbar.
+
+### 21.5 Guardrails
+
+- **Pflicht-Redaktion:** Die `curate`-Phase redigiert PII **immer** rekursiv,
+  bevor irgendetwas registriert wird. Die Trefferzahlen stehen im Feld
+  `redaction` des Runs.
+- **Kostenbudget:** `max_llm_calls` deckelt die Teacher-LLM-Aufrufe. Ist das
+  Budget aufgebraucht, werden keine neuen Calls mehr gestartet (der Run
+  bricht nicht ab, er liefert nur weniger Records).
+- **Lizenz-Gate:** `strict_license=true` lässt nur Quellen mit bestätigt
+  offener Lizenz zu (Wikipedia/Wikimedia, `.gov`, `.europa.eu`,
+  Creative Commons, Project Gutenberg …). Jede Quelle wird vor dem Abruf
+  zusätzlich gegen robots.txt und einen SSRF-Schutz geprüft.
+
+> Sechs MCP-Tools spiegeln das (`start_acquisition`, `get_acquisition`,
+> `get_acquisition_sources`, `list_acquisitions`, `answer_acquisition`,
+> `cancel_acquisition`) — siehe Kapitel 18. Eine Acquisition lässt sich
+> auch als erste Stufe einer Pipeline (Kapitel 11) verketten.
+
+---
+
+## 22. CLI — Der `trainpipe`-Terminal-Client
+
+`trainpipe` ist **zweierlei in einem Binary**: ohne Subcommand (oder mit
+`serve`) startet es den FastAPI-Server; mit einem Subcommand wird es zum
+**operativen Client** über dieselbe REST-API, die auch der MCP-Server nutzt.
+Damit fährst du die volle Schleife train → eval → improve im Terminal, ohne
+`curl`-Bodies von Hand zu bauen.
+
+### 22.1 Konfiguration
+
+Der Client liest zwei Umgebungsvariablen:
+
+| Variable | Default | Bedeutung |
+|---|---|---|
+| `TRAINPIPE_API_KEY` | — | **Pflicht** für jeden Subcommand; geht als `X-API-Key` raus |
+| `TRAINPIPE_BASE_URL` | `http://127.0.0.1:8080` | Ziel-Server |
+
+Jeder Befehl gibt **JSON auf stdout** aus (Ausnahme: `logs` gibt Klartext) —
+ideal zum Durchpipen in `jq`. Fehlt der Key, kommt `MissingAPIKey`.
+
+### 22.2 Befehlsübersicht
+
+```bash
+# Server
+trainpipe                         # = trainpipe serve  → uvicorn auf :8080
+
+# Experiments
+trainpipe submit --model Qwen/Qwen2.5-0.5B --dataset ds:ab12 \
+                 --train-kind sft --sft-type lora --gpu-count 1
+trainpipe submit --spec @spec.json          # ganzer ExperimentSpec aus Datei/@- (stdin)
+trainpipe experiments --status running --limit 20
+trainpipe get <exp-id>
+trainpipe logs <exp-id> -n 50               # -n 0 = alles
+trainpipe cancel <exp-id>
+
+# Datasets
+trainpipe datasets
+trainpipe upload my-set ./train.jsonl --description "..."
+
+# Models & Inference
+trainpipe models --name my-model
+trainpipe register-model --name my-model --experiment <exp-id> --alias staging
+trainpipe set-alias my-model prod 3
+trainpipe inference my-model@staging "Summarize: ..." --max-new-tokens 256
+
+# Studies & GPUs
+trainpipe studies
+trainpipe gpus
+
+# Evals
+trainpipe eval-suites
+trainpipe create-suite @suite.json
+trainpipe run-eval --suite <suite-id> --experiment <exp-id>
+trainpipe eval-runs --experiment <exp-id> --status completed
+trainpipe eval-results <run-id>
+trainpipe compare-evals <run-a> <run-b>
+
+# Generischer Escape-Hatch: jeder Endpoint, jede Methode
+trainpipe api GET  /datasets/<id>/models
+trainpipe api POST /acquisitions --json @acq.json
+```
+
+`--spec`, `create-suite`s Spec-Argument und `api --json` akzeptieren alle
+denselben Eingabestil: Inline-JSON, `@datei.json` oder `@-` für stdin.
+
+> Acquisitions, Pipelines, Watches und Active Learning haben (noch) keine
+> dedizierten Subcommands — dafür ist `trainpipe api <METHOD> <PATH>` da, das
+> die komplette REST-API abdeckt.
 
 ---
 
