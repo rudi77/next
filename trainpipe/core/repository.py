@@ -1896,6 +1896,8 @@ def _row_to_acquisition_run(row: aiosqlite.Row) -> AcquisitionRun:
         provider=row["provider"],
         model=row["model"],
         target_count=row["target_count"],
+        search_provider=row["search_provider"],
+        max_sources=row["max_sources"],
         spec=(
             AcquisitionSpec.model_validate_json(row["spec_json"])
             if row["spec_json"]
@@ -1922,6 +1924,8 @@ async def create_acquisition_run(
     provider: str,
     model: str,
     target_count: int,
+    search_provider: str = "none",
+    max_sources: int = 0,
     spec: AcquisitionSpec | None = None,
     run_id: str | None = None,
 ) -> str:
@@ -1930,8 +1934,8 @@ async def create_acquisition_run(
     now = utcnow_iso()
     await conn.execute(
         "INSERT INTO acquisition_runs (id, name, brief, provider, model, "
-        "target_count, spec_json, status, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+        "target_count, search_provider, max_sources, spec_json, status, "
+        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
         (
             run_id,
             name,
@@ -1939,6 +1943,8 @@ async def create_acquisition_run(
             provider,
             model,
             target_count,
+            search_provider,
+            max_sources,
             spec.model_dump_json() if spec else None,
             now,
         ),

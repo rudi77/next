@@ -405,6 +405,15 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_acquisition_sources_run ON acquisition_sources(run_id);
     """,
+    # v15: web research/acquisition config on the run (Phase 22 stage 3).
+    # ``search_provider`` selects how the research phase finds candidate
+    # sources ('none' = synth-only, the MVP default; 'mock' / 'tavily');
+    # ``max_sources`` caps how many candidate URLs the research phase gates.
+    # Defaults keep every pre-stage-3 run behaving exactly as before.
+    """
+    ALTER TABLE acquisition_runs ADD COLUMN search_provider TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE acquisition_runs ADD COLUMN max_sources INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 

@@ -329,3 +329,148 @@ async def _create_run(db, *, target_count: int) -> str:
             model="mock",
             target_count=target_count,
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — web research / acquisition
+# ---------------------------------------------------------------------------
+
+from trainpipe.acquisition import web  # noqa: E402
+from trainpipe.acquisition.runner import (  # noqa: E402
+    SourceEval,
+    acquire_records,
+    research_sources,
+)
+
+
+def test_simple_extractor_strips_scripts_and_tags():
+    html = "<html><body><script>var x=1;</script><h1>Titel</h1><p>Ein  Satz.</p></body></html>"
+    assert web.SimpleExtractor().extract(html, "u") == "Titel Ein Satz."
+
+
+# Permissive injectables so the gate runs without network (no DNS, no robots).
+def _open_gate(**kw):
+    return web.make_fetch_gate(
+        robots_fetcher=kw.pop("robots_fetcher", lambda _u: None),
+        url_safety=lambda _u: True,
+        **kw,
+    )
+
+
+def test_fetch_gate_blocks_on_robots():
+    # robots.txt that disallows everything for our agent. license_status still
+    # carries the real license verdict (not a robots sentinel).
+    gate = _open_gate(robots_fetcher=lambda _u: "User-agent: *\nDisallow: /")
+    d = gate("https://de.wikipedia.org/wiki/X")
+    assert d.allowed is False
+    assert d.license_status == "open"
+
+
+def test_fetch_gate_blocks_unsafe_url():
+    gate = web.make_fetch_gate(
+        robots_fetcher=lambda _u: None, url_safety=lambda _u: False
+    )
+    assert gate("https://example.com/x").allowed is False
+
+
+def test_fetch_gate_license_open_vs_unknown_and_strict():
+    allow = _open_gate()
+    assert allow("https://de.wikipedia.org/wiki/X").license_status == "open"
+    unknown = allow("https://example.com/x")
+    assert unknown.license_status == "unknown" and unknown.allowed is True
+    strict = _open_gate(strict_license=True)
+    assert strict("https://example.com/x").allowed is False
+
+
+def test_license_status_anchored_to_host_suffix():
+    # A substring match would wrongly call this "open"; the anchored check
+    # must classify it "unknown".
+    assert web._license_status("https://evil-wikipedia.org.attacker.net/x") == "unknown"
+    assert web._license_status("https://de.wikipedia.org/x") == "open"
+
+
+def test_mock_search_provider_caps_results():
+    hits = [web.SearchHit(url=f"https://h{i}.test") for i in range(10)]
+    got = web.MockSearchProvider(hits).search("q", max_results=3)
+    assert [h.url for h in got] == ["https://h0.test", "https://h1.test", "https://h2.test"]
+
+
+def test_research_sources_dedups_and_caps():
+    spec = AcquisitionSpec(domain="accounting", target_capabilities=["a", "b"], target_count=1)
+    # Same URL returned for both capability queries → deduped to one source.
+    provider = web.MockSearchProvider(
+        [web.SearchHit(url="https://x.test"), web.SearchHit(url="https://y.test")]
+    )
+    gate = _open_gate()
+    sources = research_sources(provider, gate, spec, max_sources=5)
+    urls = [s.url for s in sources]
+    assert urls == ["https://x.test", "https://y.test"]  # deduped across queries
+    assert all(s.allowed for s in sources)
+
+
+def test_acquire_records_only_uses_allowed_and_reports_used():
+    spec = AcquisitionSpec(domain="d", target_count=1)
+    sources = [
+        SourceEval("https://ok.test", "ok", "t", "open", allowed=True),
+        SourceEval("https://blocked.test", "no", "t", "blocked_robots", allowed=False),
+        SourceEval("https://empty.test", "e", "t", "unknown", allowed=True),
+    ]
+
+    def fetch_text(url):
+        if url == "https://ok.test":
+            return "some page text about the domain"
+        return None  # empty.test fetches nothing → skipped
+
+    records = acquire_records(
+        MockProvider(),
+        model="m",
+        sources=sources,
+        spec=spec,
+        fetch_text=fetch_text,
+        records_per_source=2,
+    )
+    # blocked never fetched, empty skipped → only ok.test marked used.
+    assert [s.url for s in sources if s.used] == ["https://ok.test"]
+    assert len(records) == 2
+
+
+async def test_driver_web_path_records_sources_and_real_records(db, monkeypatch):
+    hits = [web.SearchHit(url=f"https://src{i}.test", title=f"s{i}") for i in range(3)]
+    monkeypatch.setattr(
+        "trainpipe.acquisition.driver.make_search_provider",
+        lambda _name: web.MockSearchProvider(hits),
+    )
+    monkeypatch.setattr(
+        "trainpipe.acquisition.driver.make_fetch_gate",
+        lambda **_k: web.make_fetch_gate(
+            robots_fetcher=lambda _u: None, url_safety=lambda _u: True
+        ),
+    )
+    monkeypatch.setattr(
+        "trainpipe.acquisition.driver.make_text_fetcher",
+        lambda _ext: (lambda _url: "page text about the domain"),
+    )
+
+    async with db.connect() as conn:
+        run_id = await repository.create_acquisition_run(
+            conn,
+            name="web",
+            brief="accounting helper",
+            provider="mock",
+            model="mock",
+            target_count=4,
+            search_provider="mock",
+            max_sources=3,
+        )
+    await AcquisitionDriver(run_id, db)._run()
+
+    async with db.connect() as conn:
+        run = await repository.get_acquisition_run(conn, run_id)
+        sources = await repository.list_acquisition_sources(conn, run_id)
+    assert run.status == AcquisitionStatus.COMPLETED
+    assert run.dataset_id is not None
+    # 3 sources recorded, all allowed+fetched → used.
+    assert len(sources) == 3
+    assert all(s.used for s in sources)
+    # raw_count includes real records on top of the 4 synthesized ones.
+    assert run.raw_count > 4

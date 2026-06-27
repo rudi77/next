@@ -744,6 +744,10 @@ class AcquisitionRequest(BaseModel):
     provider: Literal["anthropic", "openai", "mock"] = "mock"
     model: str = Field("mock", min_length=1, description="Teacher/intake LLM id")
     target_count: int = Field(50, ge=1, le=100000)
+    # Web research/acquisition (stage 3). ``none`` = synthesize only (default,
+    # no network); ``mock`` / ``tavily`` enable the research + acquire phases.
+    search_provider: Literal["none", "mock", "tavily"] = "none"
+    max_sources: int = Field(5, ge=0, le=50)
     # Optional pre-filled spec (interactive/MCP path): when supplied the
     # intake phase is skipped and the run starts already-clarified.
     spec: AcquisitionSpec | None = None
@@ -764,6 +768,8 @@ class AcquisitionRun(BaseModel):
     provider: str
     model: str
     target_count: int
+    search_provider: str = "none"
+    max_sources: int = 0
     spec: AcquisitionSpec | None = None
     answers: dict[str, str] | None = None
     status: AcquisitionStatus

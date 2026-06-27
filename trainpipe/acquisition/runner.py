@@ -20,11 +20,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..api.schemas import AcquisitionSpec
 from ..synth.runner import FatalHTTPError, SynthAborted, SynthProvider
+from .web import GateDecision, SearchProvider, TextFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +141,136 @@ def intake_spec(
         target_count=target_count,
         open_questions=_str_list("open_questions"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Research (find candidate sources, gate them)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SourceEval:
+    """One candidate source after the robots/license gate ran. ``used`` is set
+    by :func:`acquire_records` once the source has actually been fetched."""
+
+    url: str
+    title: str
+    topic: str
+    license_status: str
+    allowed: bool
+    used: bool = False
+
+
+def _research_queries(spec: AcquisitionSpec) -> list[str]:
+    """Derive web-search queries from the spec. One per capability (scoped to
+    the domain + first locale), falling back to the bare domain."""
+    locale = spec.locales[0] if spec.locales else ""
+    if spec.target_capabilities:
+        parts_list = [[spec.domain, cap, locale] for cap in spec.target_capabilities]
+    else:
+        parts_list = [[spec.domain, locale]]
+    return [" ".join(p for p in parts if p) for parts in parts_list]
+
+
+def research_sources(
+    search_provider: SearchProvider,
+    gate: Callable[[str], GateDecision],
+    spec: AcquisitionSpec,
+    *,
+    max_sources: int,
+) -> list[SourceEval]:
+    """Phase 2: search per query, gate each unique URL, cap at ``max_sources``.
+
+    Every candidate is returned (allowed or not) so the caller can persist the
+    full audit trail; only ``allowed`` ones should be fetched downstream. Each
+    query only asks for the remaining budget so a paid search API isn't queried
+    for more URLs than we'll keep.
+    """
+    seen: set[str] = set()
+    out: list[SourceEval] = []
+    for query in _research_queries(spec):
+        for hit in search_provider.search(query, max_results=max_sources - len(out)):
+            if not hit.url or hit.url in seen:
+                continue
+            seen.add(hit.url)
+            decision = gate(hit.url)
+            out.append(
+                SourceEval(
+                    url=hit.url,
+                    title=hit.title,
+                    topic=query,
+                    license_status=decision.license_status,
+                    allowed=decision.allowed,
+                )
+            )
+            if len(out) >= max_sources:
+                return out
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a — Acquire (fetch allowed sources, turn text into records)
+# ---------------------------------------------------------------------------
+
+_ACQUIRE_PROMPT = """\
+Below is text extracted from a web page about "{domain}".
+Write ONE realistic fine-tuning example grounded in this text.
+The model should be able to: {capabilities}
+The model must NOT: {out_of_scope}
+Reply with ONLY a JSON object of the form
+  {{"prompt": <the user request>, "completion": <the ideal answer>}}
+
+PAGE TEXT (may be truncated):
+{page_text}
+"""
+
+# Cap page text sent to the LLM so a long article can't blow up token use.
+_MAX_PAGE_CHARS = 4000
+
+
+def acquire_records(
+    provider: SynthProvider,
+    *,
+    model: str,
+    sources: list[SourceEval],
+    spec: AcquisitionSpec,
+    fetch_text: TextFetcher,
+    records_per_source: int = 2,
+    max_tokens: int = 1024,
+    should_stop: Callable[[], bool] | None = None,
+) -> list[dict[str, str]]:
+    """Phase 3a: for each allowed source, fetch its text and ask the LLM to
+    distil ``records_per_source`` grounded examples.
+
+    Returns the records and marks each fetched source's ``used`` flag in place.
+    Sources that fail to fetch/extract are skipped (not fatal). Parse failures
+    fall back to a deterministic record so a flaky model still yields data.
+    ``should_stop`` is polled per source.
+    """
+    records: list[dict[str, str]] = []
+    for src in sources:
+        if should_stop is not None and should_stop():
+            break
+        if not src.allowed:
+            continue
+        text = fetch_text(src.url)
+        if not text:
+            continue
+        src.used = True
+        prompt = _ACQUIRE_PROMPT.format(
+            domain=spec.domain,
+            capabilities=", ".join(spec.target_capabilities) or "general competence",
+            out_of_scope=", ".join(spec.out_of_scope) or "(no explicit limits)",
+            page_text=text[:_MAX_PAGE_CHARS],
+        )
+        for i in range(records_per_source):
+            try:
+                raw = provider.generate(prompt, model=model, max_tokens=max_tokens)
+            except Exception as e:
+                logger.warning("acquisition acquire: provider failed on %s: %s", src.url, e)
+                break
+            records.append(_parse_record(raw, spec, i))
+    return records
 
 
 # ---------------------------------------------------------------------------

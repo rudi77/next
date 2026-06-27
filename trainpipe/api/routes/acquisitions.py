@@ -56,6 +56,8 @@ async def create_acquisition(
         provider=request.provider,
         model=request.model,
         target_count=target_count,
+        search_provider=request.search_provider,
+        max_sources=request.max_sources,
         spec=request.spec,
     )
 

@@ -21,6 +21,10 @@ dependencies = [
 [project.optional-dependencies]
 training = ["ms-swift>=3.0.3"]
 mcp = ["mcp>=1.0"]
+# Better HTML main-text extraction for the acquisition module's web phase.
+# Optional: the module degrades to a built-in tag-stripping extractor when
+# trafilatura isn't installed.
+acquisition = ["trafilatura>=1.8"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",

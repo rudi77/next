@@ -53,6 +53,8 @@ class AcquisitionManager:
         provider: str,
         model: str,
         target_count: int,
+        search_provider: str = "none",
+        max_sources: int = 0,
         spec: AcquisitionSpec | None = None,
     ) -> AcquisitionRun:
         async with self.db.connect() as conn:
@@ -63,6 +65,8 @@ class AcquisitionManager:
                 provider=provider,
                 model=model,
                 target_count=target_count,
+                search_provider=search_provider,
+                max_sources=max_sources,
                 spec=spec,
             )
             run = await repository.get_acquisition_run(conn, run_id)

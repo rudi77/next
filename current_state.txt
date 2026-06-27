@@ -14,8 +14,8 @@ Vorgehen: pro Stufe -> implementieren -> /simplify -> committen -> dieses File u
        (from-scratch), Curate (Dedup+Validate), Register. Noch ohne echtes Web.
 2. [DONE] Async-Klärung: awaiting_input + PATCH …/answers.
        (Kam mit Stufe 1, weil intrinsisch zur State-Machine.)
-3. [ ] Research/Acquire real: SearchProvider (Tavily) + Extractor + Lizenz-/
-       robots-Checks; [acquisition]-Extra.
+3. [DONE] Research/Acquire real: SearchProvider (mock/Tavily) + Extractor
+       (trafilatura/SimpleExtractor) + Robots/Lizenz/SSRF-Gate; [acquisition]-Extra.
 4. [ ] Härtung: Redaction-Pflichtstufe, Cost-Budget, Lineage-Snapshots, UI-Tab.
 
 ## Was steht (Stufe 1+2)
@@ -47,15 +47,33 @@ Vorgehen: pro Stufe -> implementieren -> /simplify -> committen -> dieses File u
   gibt Run zurück → Routes ohne Re-Read). Cross-Modul-Reuse + Design-
   Entscheidungen bewusst übersprungen.
 
-## Bekannte Folgearbeit (für Stufe 3/4 bzw. globale Cleanups)
+## Was steht (Stufe 3)
+
+- trainpipe/acquisition/web.py: SearchProvider (Mock/Tavily, Tavily mit
+  synth._post_with_retry), Extractor (Trafilatura/SimpleExtractor),
+  make_fetch_gate (Lizenz-Heuristik → SSRF-Check via labelstudio
+  _validate_base_url → robots.txt, robots pro Host memoisiert, alles
+  injizierbar für Offline-Tests).
+- runner.py: research_sources (Query-Budget, Dedup, Gate), acquire_records
+  (fetch+LLM-Destillat, used-Flag in place).
+- driver.py: _research_and_acquire (research→acquire→Source-Ledger);
+  target_count bleibt Gesamtbudget (Synth füllt nur Rest).
+- Migration v15: search_provider + max_sources auf acquisition_runs.
+- Schema/Repository/Route/MCP: search_provider + max_sources durchgereicht;
+  MCP get_acquisition_sources; pyproject [acquisition]-Extra (trafilatura).
+- Tests: +9 (web-Primitiven, Gate robots/SSRF/Lizenz, research/acquire,
+  Driver-Web-Pfad). Gesamt 531 passed.
+
+## Bekannte Folgearbeit (für Stufe 4 bzw. globale Cleanups)
 
 - Reuse: synth.generate_synthetic Failure-Loop und JSON-Extract aus
   evals/metrics/llm_as_judge konsolidieren (modulübergreifend).
-- Effizienz: httpx.Client in synth-Providern pro Call neu gebaut → pooling.
-- Altitude: ggf. recover_stale_runs-Funktion analog active_learning, falls
-  Resume-Posture strenger werden soll.
+- Effizienz: pooled httpx.Client + concurrent fetch über research/acquire.
+- Altitude: strict_license als Operator-Knopf plumben (Stufe 4); evtl.
+  recover_stale_runs analog active_learning.
 
 ## Log
 
 - 2026-06-27: Design-Doc committet (docs/spec/agentic-data-acquisition.md).
-- 2026-06-27: Stufe 1+2 implementiert + /simplify + Commit folgt.
+- 2026-06-27: Stufe 1+2 implementiert + /simplify + Commit 9c73ab7.
+- 2026-06-27: Stufe 3 (Web-Research/Acquire) + /simplify + Commit folgt.

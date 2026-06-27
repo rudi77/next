@@ -528,25 +528,34 @@ def start_acquisition(
     provider: str = "mock",
     model: str = "mock",
     target_count: int = 50,
+    search_provider: str = "none",
+    max_sources: int = 5,
     spec: dict | None = None,
 ) -> dict:
     """Start building a training dataset from a natural-language brief.
 
     Returns the new run (status ``queued``); the work proceeds in the
-    background through intake → synthesize → curate → register. Poll
-    ``get_acquisition`` for progress and the resulting ``dataset_id``.
+    background through intake → research → acquire → synthesize → curate →
+    register. Poll ``get_acquisition`` for progress and the resulting
+    ``dataset_id``; ``get_acquisition_sources`` lists the web sources used.
 
     Interactive clarification: if intake needs more info the run lands in
     ``awaiting_input`` with ``spec.open_questions`` — ask the human, then
     call ``answer_acquisition``. To skip the questions, pass a pre-filled
     ``spec`` (AcquisitionSpec shape) here. ``provider``: ``mock`` (offline,
-    deterministic) / ``anthropic`` / ``openai``."""
+    deterministic) / ``anthropic`` / ``openai``.
+
+    ``search_provider``: ``none`` (synthesize only, no network — default),
+    ``mock``, or ``tavily`` (real web research + acquisition, gated by
+    robots.txt + a license heuristic). ``max_sources`` caps candidate URLs."""
     body: dict[str, Any] = {
         "name": name,
         "brief": brief,
         "provider": provider,
         "model": model,
         "target_count": target_count,
+        "search_provider": search_provider,
+        "max_sources": max_sources,
     }
     if spec is not None:
         body["spec"] = spec
@@ -558,6 +567,13 @@ def get_acquisition(run_id: str) -> dict:
     """Get one acquisition run: status, current phase, open_questions (if
     parked), and ``dataset_id`` once complete."""
     return _unwrap(_get_client().get(f"/acquisitions/{run_id}"))
+
+
+@mcp.tool()
+def get_acquisition_sources(run_id: str) -> list[dict]:
+    """List the web sources a run's research/acquire phases considered, each
+    with its license_status and whether it was actually used."""
+    return _unwrap(_get_client().get(f"/acquisitions/{run_id}/sources"))
 
 
 @mcp.tool()

@@ -26,7 +26,20 @@ from ..core import repository
 from ..core.db import Database
 from ..settings import settings
 from ..synth.runner import SynthAborted, make_provider
-from .runner import curate, intake_spec, synthesize_records, write_records_jsonl
+from .runner import (
+    acquire_records,
+    curate,
+    intake_spec,
+    research_sources,
+    synthesize_records,
+    write_records_jsonl,
+)
+from .web import (
+    make_extractor,
+    make_fetch_gate,
+    make_search_provider,
+    make_text_fetcher,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,21 +110,32 @@ class AcquisitionDriver:
             if self._stop.is_set():
                 return
 
-            # --- Phase 2/3a: Research / Acquire (real web) -----------------
-            # MVP: no real web acquisition yet. Phase markers only so the
-            # progress surface is honest about what ran.
-            await self._set(phase="research")
+            # --- Phase 2/3a: Research + Acquire (real web) -----------------
+            # Only when a search provider is configured; 'none' stays
+            # synth-only with no network. Real records are combined with the
+            # synthesized ones below and deduped in curate.
+            real_records: list[dict] = []
+            if run.search_provider != "none":
+                real_records = await self._research_and_acquire(run, spec, provider)
+                if self._stop.is_set():
+                    return
 
             # --- Phase 3b: Synthesize --------------------------------------
+            # target_count is the whole-dataset budget: synthesize only the
+            # remainder the web phase didn't already supply, so turning on web
+            # research doesn't inflate the output past target_count.
             await self._set(phase="synthesize")
+            remaining = max(0, run.target_count - len(real_records))
+            synth_spec = spec.model_copy(update={"target_count": remaining})
             records = await asyncio.to_thread(
                 synthesize_records,
                 provider,
                 model=run.model,
-                spec=spec,
+                spec=synth_spec,
                 answers=run.answers,
                 should_stop=self._stop.is_set,
             )
+            records = real_records + records
             await self._set(raw_count=len(records))
             if self._stop.is_set():
                 return
@@ -160,6 +184,50 @@ class AcquisitionDriver:
             )
         finally:
             logger.info("acquisition=%s driver exit", self.run_id)
+
+    async def _research_and_acquire(self, run, spec, provider) -> list[dict]:
+        """Phases 2+3a: find candidate sources, gate them, fetch the allowed
+        ones, and distil grounded records. Persists the full source ledger
+        (allowed and skipped) with the per-source ``used`` flag."""
+        await self._set(phase="research")
+        search = make_search_provider(run.search_provider)
+        gate = make_fetch_gate()
+        sources = await asyncio.to_thread(
+            research_sources, search, gate, spec, max_sources=run.max_sources
+        )
+
+        await self._set(phase="acquire")
+        fetch_text = make_text_fetcher(make_extractor())
+        records = await asyncio.to_thread(
+            acquire_records,
+            provider,
+            model=run.model,
+            sources=sources,
+            spec=spec,
+            fetch_text=fetch_text,
+            should_stop=self._stop.is_set,
+        )
+
+        # acquire_records marked each fetched source's ``used`` flag in place.
+        async with self.db.connect() as conn:
+            for src in sources:
+                await repository.record_acquisition_source(
+                    conn,
+                    run_id=self.run_id,
+                    url=src.url,
+                    title=src.title,
+                    topic=src.topic,
+                    license_status=src.license_status,
+                    used=src.used,
+                )
+        logger.info(
+            "acquisition=%s acquired %d real record(s) from %d/%d source(s)",
+            self.run_id,
+            len(records),
+            sum(1 for s in sources if s.used),
+            len(sources),
+        )
+        return records
 
     async def _register(
         self,
