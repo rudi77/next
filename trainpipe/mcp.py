@@ -21,10 +21,12 @@ Add to Claude Code:
 from __future__ import annotations
 
 import base64
-import os
 from typing import Any
 
 import httpx
+
+from .client import MissingAPIKey, build_client
+from .client import unwrap as _unwrap
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -33,36 +35,6 @@ except ImportError as exc:  # pragma: no cover
         "trainpipe.mcp requires the 'mcp' package. "
         "Install with: pip install -e \".[mcp]\""
     ) from exc
-
-
-def _build_client() -> httpx.Client:
-    base_url = os.environ.get("TRAINPIPE_BASE_URL", "http://127.0.0.1:8080")
-    api_key = os.environ.get("TRAINPIPE_API_KEY")
-    if not api_key:
-        raise SystemExit(
-            "TRAINPIPE_API_KEY environment variable must be set "
-            "(use the same value you put in trainpipe's .env)"
-        )
-    return httpx.Client(
-        base_url=base_url,
-        headers={"X-API-Key": api_key},
-        timeout=httpx.Timeout(30.0, connect=5.0),
-    )
-
-
-def _unwrap(resp: httpx.Response) -> Any:
-    """Raise on HTTP errors; return parsed body for JSON, text otherwise."""
-    if resp.is_error:
-        # Re-raise with body preserved so MCP clients see the actionable detail.
-        try:
-            detail = resp.json()
-        except ValueError:
-            detail = resp.text
-        raise RuntimeError(f"HTTP {resp.status_code}: {detail}")
-    ctype = resp.headers.get("content-type", "")
-    if ctype.startswith("application/json"):
-        return resp.json()
-    return resp.text
 
 
 mcp = FastMCP("trainpipe")
@@ -77,7 +49,10 @@ def _get_client() -> httpx.Client:
     """
     global _client
     if _client is None:
-        _client = _build_client()
+        try:
+            _client = build_client()
+        except MissingAPIKey as e:
+            raise SystemExit(str(e)) from e
     return _client
 
 
