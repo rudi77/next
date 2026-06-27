@@ -43,7 +43,7 @@
 
     <!-- Tabs (scroll-x on narrow phones) -->
     <nav class="max-w-screen-xl mx-auto px-2 sm:px-4 pb-0 flex gap-1 overflow-x-auto scrollbar-thin">
-      <template x-for="t in ['experiments','studies','pipelines','evals','models','playground','active-learning','watches','datasets','synth','compliance','gpus']" :key="t">
+      <template x-for="t in ['experiments','studies','pipelines','evals','models','playground','active-learning','watches','datasets','synth','acquisition','compliance','gpus']" :key="t">
         <button @click="tab = t"
                 :class="tab === t ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'"
                 class="shrink-0 px-3 sm:px-4 py-2.5 sm:py-2 rounded-t text-sm">
@@ -432,6 +432,140 @@
             <span x-show="synthRunning">Generating…</span>
           </button>
         </div>
+      </div>
+    </section>
+
+    <!-- ── Acquisition tab ───────────────────────────────────────── -->
+    <section x-show="tab === 'acquisition'">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Data acquisition</h2>
+        <button @click="loadAcquisitions()" class="text-xs px-2 py-1 border rounded">Refresh</button>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4 sm:p-5 space-y-3 text-sm max-w-2xl">
+        <p class="text-xs text-slate-600">
+          Build a training set from a natural-language brief: intake → research →
+          acquire → synthesize → curate → register. The result is registered as a
+          new dataset (Datasets tab). PII-redaction always runs before register.
+          Provider <code class="bg-slate-100 px-1 rounded">mock</code> is offline.
+        </p>
+        <div>
+          <label class="text-xs text-slate-600 block">brief</label>
+          <textarea x-model="acqDraft.brief" rows="3"
+                    placeholder="Training data to train an accountant LLM for the DACH region."
+                    class="w-full border rounded px-2 py-2 text-sm"></textarea>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">provider</label>
+            <select x-model="acqDraft.provider" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option value="mock">mock (deterministic, no API)</option>
+              <option value="anthropic">anthropic</option>
+              <option value="openai">openai</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">model</label>
+            <input x-model="acqDraft.model" placeholder="mock | claude-… | gpt-…"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <label class="text-xs text-slate-600 block">target_count</label>
+            <input type="number" min="1" max="100000" x-model.number="acqDraft.target_count"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">search</label>
+            <select x-model="acqDraft.search_provider" class="w-full border rounded px-2 py-2 text-base sm:text-sm">
+              <option value="none">none (synth only)</option>
+              <option value="mock">mock</option>
+              <option value="tavily">tavily</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">max_sources</label>
+            <input type="number" min="0" max="50" x-model.number="acqDraft.max_sources"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-600 block">max_llm_calls</label>
+            <input type="number" min="0" x-model.number="acqDraft.max_llm_calls"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+          <div>
+            <label class="text-xs text-slate-600 block">output name</label>
+            <input x-model="acqDraft.name" placeholder="dach-accounting-v1"
+                   class="w-full border rounded px-2 py-2 text-base sm:text-sm" />
+          </div>
+          <label class="flex items-center gap-2 text-xs text-slate-600 pb-2">
+            <input type="checkbox" x-model="acqDraft.strict_license" />
+            strict license (skip unconfirmed web sources)
+          </label>
+        </div>
+        <div x-show="acqError" class="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded"
+             x-text="acqError"></div>
+        <div class="pt-2 flex justify-end">
+          <button @click="submitAcquisition()" :disabled="acqRunning"
+                  class="px-4 py-2 text-sm bg-slate-900 text-white rounded disabled:opacity-50">
+            <span x-show="!acqRunning">Start acquisition</span>
+            <span x-show="acqRunning">Starting…</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Runs list -->
+      <div class="mt-5 bg-white rounded-lg shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-500 text-xs">
+            <tr>
+              <th class="text-left px-3 py-2">name</th>
+              <th class="text-left px-3 py-2">status</th>
+              <th class="text-left px-3 py-2">phase</th>
+              <th class="text-left px-3 py-2">records</th>
+              <th class="text-left px-3 py-2">dataset</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in acqRuns" :key="r.id">
+              <tr class="border-t">
+                <td class="px-3 py-2" x-text="r.name"></td>
+                <td class="px-3 py-2">
+                  <span class="px-2 py-0.5 rounded text-xs"
+                        :class="{
+                          'bg-emerald-100 text-emerald-800': r.status === 'completed',
+                          'bg-amber-100 text-amber-800': r.status === 'running' || r.status === 'queued',
+                          'bg-indigo-100 text-indigo-800': r.status === 'awaiting_input',
+                          'bg-rose-100 text-rose-800': r.status === 'failed',
+                          'bg-slate-100 text-slate-600': r.status === 'cancelled'
+                        }" x-text="r.status"></span>
+                </td>
+                <td class="px-3 py-2 text-slate-500" x-text="r.phase || '—'"></td>
+                <td class="px-3 py-2 text-slate-500"
+                    x-text="(r.final_count ?? r.raw_count ?? '—')"></td>
+                <td class="px-3 py-2">
+                  <button x-show="r.dataset_id" @click="tab='datasets'"
+                          class="text-xs text-indigo-600 hover:underline"
+                          x-text="'ds:' + (r.dataset_id || '').slice(0,8)"></button>
+                  <span x-show="!r.dataset_id" class="text-slate-400 text-xs">—</span>
+                </td>
+                <td class="px-3 py-2 text-right space-x-2">
+                  <button x-show="r.status === 'awaiting_input'" @click="answerAcquisition(r)"
+                          class="text-xs text-indigo-600 hover:underline">Answer</button>
+                  <button x-show="r.status === 'running' || r.status === 'queued' || r.status === 'awaiting_input'"
+                          @click="cancelAcquisition(r.id)"
+                          class="text-xs text-rose-600 hover:underline">Cancel</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="acqRuns.length === 0">
+              <td colspan="6" class="px-3 py-6 text-center text-slate-400 text-xs">No acquisition runs yet.</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -2467,6 +2601,14 @@ function trainpipe() {
     synthRunning: false,
     synthResult: null,
 
+    // Phase 22: acquisition tab
+    acqDraft: { name: '', brief: '', provider: 'mock', model: 'mock',
+                target_count: 50, search_provider: 'none', max_sources: 5,
+                strict_license: false, max_llm_calls: 0 },
+    acqError: '',
+    acqRunning: false,
+    acqRuns: [],
+
     // Phase C: compliance (forget-scan) tab
     forgetDraft: { term: '', regex: false, case_sensitive: false },
     forgetError: '',
@@ -2552,6 +2694,7 @@ function trainpipe() {
         this.api('/models').then(r => this.models = r).catch(() => {}),
         this.api('/pipelines').then(r => this.pipelines = r).catch(() => {}),
         this.api('/active-learning/runs?limit=100').then(r => this.alRuns = r).catch(() => {}),
+        this.api('/acquisitions?limit=100').then(r => this.acqRuns = r).catch(() => {}),
         this.api('/watches').then(r => this.watches = r).catch(() => {}),
         this.api('/studies/cost-summary').then(r => this.studyCostPoints = r).catch(() => {}),
       ];
@@ -3690,6 +3833,54 @@ function trainpipe() {
         this.synthError = e.message;
       } finally {
         this.synthRunning = false;
+      }
+    },
+
+    // ── acquisition ────────────────────────────────────────────
+    async loadAcquisitions() {
+      this.acqRuns = await this.api('/acquisitions?limit=100').catch(() => []);
+    },
+    async submitAcquisition() {
+      this.acqError = '';
+      if (!this.acqDraft.name.trim()) { this.acqError = 'Output name is required'; return; }
+      if (!this.acqDraft.brief.trim()) { this.acqError = 'Brief is required'; return; }
+      this.acqRunning = true;
+      try {
+        await this.api('/acquisitions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.acqDraft),
+        });
+        this.flash('Acquisition started');
+        await this.loadAcquisitions();
+      } catch (e) {
+        this.acqError = e.message;
+      } finally {
+        this.acqRunning = false;
+      }
+    },
+    async cancelAcquisition(id) {
+      await this.api(`/acquisitions/${id}/cancel`, { method: 'POST' }).catch(e => this.flash(e.message));
+      await this.loadAcquisitions();
+    },
+    async answerAcquisition(run) {
+      const questions = run.spec?.open_questions || [];
+      const answers = {};
+      for (const q of questions) {
+        const a = window.prompt(q);
+        if (a === null) return;  // cancelled
+        answers[q] = a;
+      }
+      try {
+        await this.api(`/acquisitions/${run.id}/answers`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers }),
+        });
+        this.flash('Answers submitted — resuming');
+        await this.loadAcquisitions();
+      } catch (e) {
+        this.flash(e.message);
       }
     },
 

@@ -13,6 +13,11 @@ from typing import Any
 import aiosqlite
 
 from ..api.schemas import (
+    ACQUISITION_TERMINAL_STATUSES,
+    AcquisitionRun,
+    AcquisitionSource,
+    AcquisitionSpec,
+    AcquisitionStatus,
     ActiveLearningRun,
     ALRunStatus,
     AnnotationQueueItem,
@@ -1876,3 +1881,219 @@ async def recover_eval_runs(conn: aiosqlite.Connection) -> int:
     await conn.commit()
     _ = now  # reserved for future started_at history table
     return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Agentic data acquisition (Phase 22)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_acquisition_run(row: aiosqlite.Row) -> AcquisitionRun:
+    return AcquisitionRun(
+        id=row["id"],
+        name=row["name"],
+        brief=row["brief"],
+        provider=row["provider"],
+        model=row["model"],
+        target_count=row["target_count"],
+        search_provider=row["search_provider"],
+        max_sources=row["max_sources"],
+        strict_license=bool(row["strict_license"]),
+        max_llm_calls=row["max_llm_calls"],
+        redaction=(
+            json.loads(row["redaction_json"]) if row["redaction_json"] else None
+        ),
+        spec=(
+            AcquisitionSpec.model_validate_json(row["spec_json"])
+            if row["spec_json"]
+            else None
+        ),
+        answers=json.loads(row["answers_json"]) if row["answers_json"] else None,
+        status=AcquisitionStatus(row["status"]),
+        phase=row["phase"],
+        dataset_id=row["dataset_id"],
+        raw_count=row["raw_count"],
+        final_count=row["final_count"],
+        error=row["error"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+        finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+    )
+
+
+async def create_acquisition_run(
+    conn: aiosqlite.Connection,
+    *,
+    name: str,
+    brief: str,
+    provider: str,
+    model: str,
+    target_count: int,
+    search_provider: str = "none",
+    max_sources: int = 0,
+    strict_license: bool = False,
+    max_llm_calls: int = 0,
+    spec: AcquisitionSpec | None = None,
+    run_id: str | None = None,
+) -> str:
+    if run_id is None:
+        run_id = uuid.uuid4().hex
+    now = utcnow_iso()
+    await conn.execute(
+        "INSERT INTO acquisition_runs (id, name, brief, provider, model, "
+        "target_count, search_provider, max_sources, strict_license, "
+        "max_llm_calls, spec_json, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+        (
+            run_id,
+            name,
+            brief,
+            provider,
+            model,
+            target_count,
+            search_provider,
+            max_sources,
+            int(strict_license),
+            max_llm_calls,
+            spec.model_dump_json() if spec else None,
+            now,
+        ),
+    )
+    await conn.commit()
+    return run_id
+
+
+async def get_acquisition_run(
+    conn: aiosqlite.Connection, run_id: str
+) -> AcquisitionRun | None:
+    cur = await conn.execute(
+        "SELECT * FROM acquisition_runs WHERE id = ?", (run_id,)
+    )
+    row = await cur.fetchone()
+    return _row_to_acquisition_run(row) if row else None
+
+
+async def list_acquisition_runs(
+    conn: aiosqlite.Connection,
+    *,
+    status: AcquisitionStatus | None = None,
+    limit: int = 100,
+) -> list[AcquisitionRun]:
+    sql = "SELECT * FROM acquisition_runs"
+    args: list[Any] = []
+    if status:
+        sql += " WHERE status = ?"
+        args.append(status.value)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
+    cur = await conn.execute(sql, args)
+    rows = await cur.fetchall()
+    return [_row_to_acquisition_run(r) for r in rows]
+
+
+async def list_active_acquisition_runs(
+    conn: aiosqlite.Connection,
+) -> list[AcquisitionRun]:
+    """Runs that still have a live driver to (re)start: queued/running.
+
+    ``awaiting_input`` is deliberately excluded — those are parked on the
+    operator, not on us, so a restart must leave them parked rather than
+    resume and re-ask.
+    """
+    cur = await conn.execute(
+        "SELECT * FROM acquisition_runs WHERE status IN ('queued', 'running') "
+        "ORDER BY created_at ASC"
+    )
+    rows = await cur.fetchall()
+    return [_row_to_acquisition_run(r) for r in rows]
+
+
+async def update_acquisition_run(
+    conn: aiosqlite.Connection,
+    run_id: str,
+    *,
+    status: AcquisitionStatus | None = None,
+    phase: str | None = None,
+    spec: AcquisitionSpec | None = None,
+    answers: dict[str, str] | None = None,
+    dataset_id: str | None = None,
+    raw_count: int | None = None,
+    final_count: int | None = None,
+    redaction: dict[str, int] | None = None,
+    error: str | None = None,
+) -> None:
+    fields: list[str] = []
+    args: list[Any] = []
+    # Plain column → value; None means "leave it". Kept data-driven so a new
+    # column is one row, not another copy-pasted if-block.
+    columns = {
+        "phase": phase,
+        "spec_json": spec.model_dump_json() if spec is not None else None,
+        "answers_json": json.dumps(answers) if answers is not None else None,
+        "dataset_id": dataset_id,
+        "raw_count": raw_count,
+        "final_count": final_count,
+        "redaction_json": json.dumps(redaction) if redaction is not None else None,
+        "error": error,
+    }
+    if status is not None:
+        fields.append("status = ?")
+        args.append(status.value)
+        if status == AcquisitionStatus.RUNNING:
+            # Only stamp started_at the first time we go RUNNING.
+            fields.append("started_at = COALESCE(started_at, ?)")
+            args.append(utcnow_iso())
+        elif status in ACQUISITION_TERMINAL_STATUSES:
+            fields.append("finished_at = ?")
+            args.append(utcnow_iso())
+    for col, val in columns.items():
+        if val is not None:
+            fields.append(f"{col} = ?")
+            args.append(val)
+    if not fields:
+        return
+    args.append(run_id)
+    await conn.execute(
+        f"UPDATE acquisition_runs SET {', '.join(fields)} WHERE id = ?", args
+    )
+    await conn.commit()
+
+
+async def record_acquisition_source(
+    conn: aiosqlite.Connection,
+    *,
+    run_id: str,
+    url: str,
+    title: str | None = None,
+    topic: str | None = None,
+    license_status: str = "unknown",
+    used: bool = False,
+) -> None:
+    await conn.execute(
+        "INSERT INTO acquisition_sources (run_id, url, title, topic, "
+        "license_status, used, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (run_id, url, title, topic, license_status, int(used), utcnow_iso()),
+    )
+    await conn.commit()
+
+
+async def list_acquisition_sources(
+    conn: aiosqlite.Connection, run_id: str
+) -> list[AcquisitionSource]:
+    cur = await conn.execute(
+        "SELECT * FROM acquisition_sources WHERE run_id = ? ORDER BY id ASC",
+        (run_id,),
+    )
+    rows = await cur.fetchall()
+    return [
+        AcquisitionSource(
+            id=r["id"],
+            url=r["url"],
+            title=r["title"],
+            topic=r["topic"],
+            license_status=r["license_status"],
+            used=bool(r["used"]),
+            created_at=datetime.fromisoformat(r["created_at"]),
+        )
+        for r in rows
+    ]

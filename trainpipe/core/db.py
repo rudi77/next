@@ -353,6 +353,78 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_lineage_parent ON dataset_lineage(parent_id);
     """,
+    # v14: agentic data acquisition (Phase 22). One ``acquisition_runs``
+    # row is a single "build me a training set from this brief" job that
+    # walks phases intake → research → acquire/synthesize → curate →
+    # register (see docs/spec/agentic-data-acquisition.md). Unlike a
+    # pipeline it dispatches no experiments — the work runs in-process in
+    # an AcquisitionDriver task, so the row IS the state machine: ``phase``
+    # is where the driver currently is, ``spec_json`` is the structured
+    # intake result (NULL until intake runs), ``answers_json`` holds the
+    # operator's replies to ``spec.open_questions`` for the awaiting_input
+    # pause/resume path. ``dataset_id`` is the registered result.
+    #
+    # ``acquisition_sources`` is the per-run source ledger the research /
+    # acquire phases populate (URL + topic + license decision), kept
+    # separate so the audit trail survives even when a source is skipped.
+    # Empty in the MVP (no real web yet) but the table ships now so the
+    # later phase is a pure additive change, not another migration of the
+    # runs table.
+    """
+    CREATE TABLE acquisition_runs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        brief TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        target_count INTEGER NOT NULL,
+        spec_json TEXT,
+        answers_json TEXT,
+        status TEXT NOT NULL,
+        phase TEXT,
+        dataset_id TEXT,
+        raw_count INTEGER,
+        final_count INTEGER,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+    );
+    CREATE INDEX idx_acquisition_runs_status ON acquisition_runs(status);
+
+    CREATE TABLE acquisition_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT,
+        topic TEXT,
+        license_status TEXT NOT NULL DEFAULT 'unknown',
+        used INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES acquisition_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_acquisition_sources_run ON acquisition_sources(run_id);
+    """,
+    # v15: web research/acquisition config on the run (Phase 22 stage 3).
+    # ``search_provider`` selects how the research phase finds candidate
+    # sources ('none' = synth-only, the MVP default; 'mock' / 'tavily');
+    # ``max_sources`` caps how many candidate URLs the research phase gates.
+    # Defaults keep every pre-stage-3 run behaving exactly as before.
+    """
+    ALTER TABLE acquisition_runs ADD COLUMN search_provider TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE acquisition_runs ADD COLUMN max_sources INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v16: acquisition hardening (Phase 22 stage 4). ``strict_license``
+    # rejects "unknown"-license web sources at the gate (compliance posture);
+    # ``max_llm_calls`` caps total teacher-LLM calls across the synthesize +
+    # acquire phases so a run can't burn an unbounded budget (0 = unlimited).
+    # ``redaction_json`` records the PII-redaction hit counts the mandatory
+    # curate step produced, for the audit trail. Defaults preserve behavior.
+    """
+    ALTER TABLE acquisition_runs ADD COLUMN strict_license INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE acquisition_runs ADD COLUMN max_llm_calls INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE acquisition_runs ADD COLUMN redaction_json TEXT;
+    """,
 ]
 
 

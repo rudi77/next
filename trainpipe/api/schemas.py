@@ -653,3 +653,140 @@ class Watch(BaseModel):
     # to /enable it after fixing the config.
     consecutive_failures: int = 0
     last_error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Agentic data acquisition (Phase 22) — see
+# docs/spec/agentic-data-acquisition.md
+# ---------------------------------------------------------------------------
+
+# Output formats the acquired set can take. Mirrors the training kinds
+# the rest of the stack already understands; ``sft`` (prompt/completion)
+# is the default and the only one the MVP synthesizer emits.
+AcquisitionFormat = Literal["sft", "dpo", "chat", "completion"]
+
+
+class AcquisitionStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    # Intake produced open_questions and no answers are on file yet — the
+    # driver has parked the run and is waiting for PATCH …/answers.
+    AWAITING_INPUT = "awaiting_input"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+# The terminal statuses — a run in any of these is finished and won't move
+# again. Single source of truth for the driver, manager, and route.
+ACQUISITION_TERMINAL_STATUSES = frozenset(
+    {
+        AcquisitionStatus.COMPLETED,
+        AcquisitionStatus.FAILED,
+        AcquisitionStatus.CANCELLED,
+    }
+)
+
+
+# The phase the driver is currently in (or last reached). Stored as a
+# plain string column; this Literal documents the vocabulary.
+AcquisitionPhase = Literal[
+    "intake", "research", "acquire", "synthesize", "curate", "register"
+]
+
+
+class AcquisitionSpec(BaseModel):
+    """Structured result of the intake phase — the brief turned into a
+    machine-actionable plan. Also accepted as a pre-filled spec on the
+    interactive (MCP) path so the agent can answer the open questions
+    before the run even starts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = Field(..., min_length=1)
+    locales: list[str] = Field(default_factory=list)
+    target_capabilities: list[str] = Field(default_factory=list)
+    # What the model should explicitly NOT do — carried through to the
+    # synthesizer prompt so out-of-scope behaviour isn't trained in.
+    out_of_scope: list[str] = Field(default_factory=list)
+    format: AcquisitionFormat = "sft"
+    target_count: int = Field(..., ge=1, le=100000)
+    # Non-empty → intake parks the run in ``awaiting_input`` until the
+    # operator answers (unless answers are already supplied).
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class AcquisitionSource(BaseModel):
+    """One source the research/acquire phases considered. Empty list in
+    the MVP — populated once real web acquisition lands."""
+
+    id: int
+    url: str
+    title: str | None = None
+    topic: str | None = None
+    license_status: str = "unknown"
+    used: bool = False
+    created_at: datetime
+
+
+class AcquisitionRequest(BaseModel):
+    """Start an acquisition run from a natural-language brief."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, description="Name for the output dataset")
+    brief: str = Field(
+        ...,
+        min_length=1,
+        description="Natural-language order, e.g. 'training data to train an "
+        "accountant LLM for the DACH region'",
+    )
+    provider: Literal["anthropic", "openai", "mock"] = "mock"
+    model: str = Field("mock", min_length=1, description="Teacher/intake LLM id")
+    target_count: int = Field(50, ge=1, le=100000)
+    # Web research/acquisition (stage 3). ``none`` = synthesize only (default,
+    # no network); ``mock`` / ``tavily`` enable the research + acquire phases.
+    search_provider: Literal["none", "mock", "tavily"] = "none"
+    max_sources: int = Field(5, ge=0, le=50)
+    # Hardening (stage 4). ``strict_license`` skips web sources whose license
+    # the gate can't confirm as open. ``max_llm_calls`` caps total teacher-LLM
+    # calls across synthesize + acquire (0 = unlimited).
+    strict_license: bool = False
+    max_llm_calls: int = Field(0, ge=0, le=1000000)
+    # Optional pre-filled spec (interactive/MCP path): when supplied the
+    # intake phase is skipped and the run starts already-clarified.
+    spec: AcquisitionSpec | None = None
+
+
+class AcquisitionAnswers(BaseModel):
+    """Answers to a parked run's ``spec.open_questions`` (async path)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answers: dict[str, str] = Field(..., min_length=1)
+
+
+class AcquisitionRun(BaseModel):
+    id: str
+    name: str
+    brief: str
+    provider: str
+    model: str
+    target_count: int
+    search_provider: str = "none"
+    max_sources: int = 0
+    strict_license: bool = False
+    max_llm_calls: int = 0
+    # PII-redaction hit counts from the mandatory curate step (entity → count).
+    redaction: dict[str, int] | None = None
+    spec: AcquisitionSpec | None = None
+    answers: dict[str, str] | None = None
+    status: AcquisitionStatus
+    phase: AcquisitionPhase | None = None
+    dataset_id: str | None = None
+    raw_count: int | None = None
+    final_count: int | None = None
+    error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None

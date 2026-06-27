@@ -516,6 +516,100 @@ def forget_scan(
     return asyncio.run(_do())
 
 
+# ---------------------------------------------------------------------------
+# Agentic data acquisition (Phase 22)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def start_acquisition(
+    name: str,
+    brief: str,
+    provider: str = "mock",
+    model: str = "mock",
+    target_count: int = 50,
+    search_provider: str = "none",
+    max_sources: int = 5,
+    strict_license: bool = False,
+    max_llm_calls: int = 0,
+    spec: dict | None = None,
+) -> dict:
+    """Start building a training dataset from a natural-language brief.
+
+    Returns the new run (status ``queued``); the work proceeds in the
+    background through intake → research → acquire → synthesize → curate →
+    register. Poll ``get_acquisition`` for progress and the resulting
+    ``dataset_id``; ``get_acquisition_sources`` lists the web sources used.
+
+    Interactive clarification: if intake needs more info the run lands in
+    ``awaiting_input`` with ``spec.open_questions`` — ask the human, then
+    call ``answer_acquisition``. To skip the questions, pass a pre-filled
+    ``spec`` (AcquisitionSpec shape) here. ``provider``: ``mock`` (offline,
+    deterministic) / ``anthropic`` / ``openai``.
+
+    ``search_provider``: ``none`` (synthesize only, no network — default),
+    ``mock``, or ``tavily`` (real web research + acquisition, gated by
+    robots.txt + a license heuristic). ``max_sources`` caps candidate URLs.
+    ``strict_license`` skips web sources whose license can't be confirmed
+    open; ``max_llm_calls`` caps total teacher-LLM calls (0 = unlimited).
+    PII-redaction always runs before the dataset is registered."""
+    body: dict[str, Any] = {
+        "name": name,
+        "brief": brief,
+        "provider": provider,
+        "model": model,
+        "target_count": target_count,
+        "search_provider": search_provider,
+        "max_sources": max_sources,
+        "strict_license": strict_license,
+        "max_llm_calls": max_llm_calls,
+    }
+    if spec is not None:
+        body["spec"] = spec
+    return _unwrap(_get_client().post("/acquisitions", json=body))
+
+
+@mcp.tool()
+def get_acquisition(run_id: str) -> dict:
+    """Get one acquisition run: status, current phase, open_questions (if
+    parked), and ``dataset_id`` once complete."""
+    return _unwrap(_get_client().get(f"/acquisitions/{run_id}"))
+
+
+@mcp.tool()
+def get_acquisition_sources(run_id: str) -> list[dict]:
+    """List the web sources a run's research/acquire phases considered, each
+    with its license_status and whether it was actually used."""
+    return _unwrap(_get_client().get(f"/acquisitions/{run_id}/sources"))
+
+
+@mcp.tool()
+def list_acquisitions(status: str | None = None, limit: int = 100) -> list[dict]:
+    """List acquisition runs, optionally filtered by status (queued,
+    running, awaiting_input, completed, failed, cancelled)."""
+    params: dict[str, Any] = {"limit": limit}
+    if status:
+        params["status"] = status
+    return _unwrap(_get_client().get("/acquisitions", params=params))
+
+
+@mcp.tool()
+def answer_acquisition(run_id: str, answers: dict) -> dict:
+    """Answer a parked run's ``spec.open_questions`` (keyed by question) to
+    resume it. Errors if the run isn't in ``awaiting_input``."""
+    return _unwrap(
+        _get_client().patch(
+            f"/acquisitions/{run_id}/answers", json={"answers": answers}
+        )
+    )
+
+
+@mcp.tool()
+def cancel_acquisition(run_id: str) -> dict:
+    """Cancel an acquisition run in any phase."""
+    return _unwrap(_get_client().post(f"/acquisitions/{run_id}/cancel"))
+
+
 def main() -> None:
     """Entrypoint for ``python -m trainpipe.mcp`` and the trainpipe-mcp script."""
     mcp.run()
