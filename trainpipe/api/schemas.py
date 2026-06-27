@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SFTType = Literal["lora", "full", "qlora", "longlora", "adalora", "ia3"]
 
@@ -10,6 +10,12 @@ SFTType = Literal["lora", "full", "qlora", "longlora", "adalora", "ia3"]
 # instruction-tuning path; the *PO family runs via ``swift rlhf`` with
 # the matching ``--rlhf_type``.
 TrainKind = Literal["sft", "dpo", "kto", "ppo", "grpo"]
+
+# Train kinds that run through ``swift rlhf``.
+RLHF_KINDS = frozenset({"dpo", "kto", "ppo", "grpo"})
+# RL kinds that optimise against a reward signal (vs. fixed preference
+# pairs): they need a reward model and/or reward functions to even start.
+RL_REWARD_KINDS = frozenset({"ppo", "grpo"})
 
 
 class ExperimentStatus(str, Enum):
@@ -49,6 +55,35 @@ class TrainingHyperparameters(BaseModel):
     lora_alpha: int = 32
     lora_dropout: float = 0.05
     lora_target_modules: list[str] = Field(default_factory=lambda: ["all-linear"])
+
+
+class RLHFHyperparameters(BaseModel):
+    """RL / preference-tuning knobs for the ``swift rlhf`` family (Phase 13).
+
+    Only consumed when ``train_kind`` is one of dpo/kto/ppo/grpo. Each field
+    maps to an ms-swift v4 ``swift rlhf`` flag; ``None`` means "leave the
+    trainer default". The cross-field rules (e.g. GRPO/PPO need a reward
+    signal) are enforced by :class:`ExperimentSpec`'s validator so a bad
+    spec is rejected at submit time instead of failing minutes into a run.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # KL-regularisation coefficient. DPO/KTO/GRPO use it; PPO ignores it.
+    beta: float | None = Field(None, ge=0.0)
+    # Reward-model id/path for the RL kinds (--reward_model). Required for
+    # PPO; one of reward_model / reward_funcs is required for GRPO.
+    reward_model: str | None = None
+    # GRPO built-in reward functions (e.g. ["accuracy", "format"]) →
+    # --reward_funcs. GRPO-only.
+    reward_funcs: list[str] = Field(default_factory=list)
+    # GRPO group size: completions sampled per prompt (--num_generations).
+    # GRPO-only; must be >= 2 for a meaningful group advantage.
+    num_generations: int | None = Field(None, ge=2)
+    # Rollout completion length for GRPO/PPO (--max_completion_length).
+    max_completion_length: int | None = Field(None, ge=1)
+    # Sampling temperature for rollouts (--temperature). GRPO/PPO.
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
 
 
 class MultimodalSettings(BaseModel):
@@ -107,6 +142,8 @@ class ExperimentSpec(BaseModel):
     priority: int = 0
 
     hyperparameters: TrainingHyperparameters = Field(default_factory=TrainingHyperparameters)
+    # RL / preference knobs; only valid when train_kind is in RLHF_KINDS.
+    rlhf: RLHFHyperparameters | None = None
     multimodal: MultimodalSettings | None = None
     distributed: DistributedConfig | None = None
     # Phase 21: domain vocab extension. Each entry is added as a special
@@ -128,6 +165,40 @@ class ExperimentSpec(BaseModel):
     # Suite IDs to evaluate against after the training run completes.
     # The scheduler enqueues one EvalRun per suite on status=completed.
     auto_eval: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_rlhf(self) -> "ExperimentSpec":
+        """Keep RL config and train_kind consistent, and require a reward
+        signal for the RL kinds so PPO/GRPO can't be queued in a state that
+        only fails once the trainer is already spinning."""
+        rlhf = self.rlhf
+        if self.train_kind not in RLHF_KINDS:
+            if rlhf is not None:
+                kinds = ", ".join(sorted(RLHF_KINDS))
+                raise ValueError(
+                    "rlhf settings are only valid for preference/RL train_kinds "
+                    f"({kinds}), not {self.train_kind}"
+                )
+            return self
+
+        # GRPO-only knobs must not leak onto other kinds.
+        if rlhf is not None and self.train_kind != "grpo":
+            if rlhf.reward_funcs:
+                raise ValueError("rlhf.reward_funcs is only valid for train_kind=grpo")
+            if rlhf.num_generations is not None:
+                raise ValueError("rlhf.num_generations is only valid for train_kind=grpo")
+
+        # PPO/GRPO optimise against a reward and can't start without one.
+        if self.train_kind in RL_REWARD_KINDS:
+            has_reward_model = rlhf is not None and rlhf.reward_model is not None
+            has_reward_funcs = rlhf is not None and bool(rlhf.reward_funcs)
+            if self.train_kind == "ppo" and not has_reward_model:
+                raise ValueError("train_kind=ppo requires rlhf.reward_model")
+            if self.train_kind == "grpo" and not (has_reward_model or has_reward_funcs):
+                raise ValueError(
+                    "train_kind=grpo requires rlhf.reward_model or rlhf.reward_funcs"
+                )
+        return self
 
 
 class ExperimentRecord(BaseModel):

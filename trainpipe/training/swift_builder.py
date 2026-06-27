@@ -89,6 +89,26 @@ def build_swift_command(
         for tm in hp.lora_target_modules:
             argv += ["--target_modules", tm]
 
+    # Phase 13: RL / preference knobs for the ``swift rlhf`` family. The
+    # spec validator guarantees these only appear for non-sft kinds and
+    # that PPO/GRPO carry a reward signal, so we just translate whatever
+    # is set into flags. ``reward_funcs`` is emitted as one flag followed
+    # by all values (ms-swift's argparse uses ``nargs='+'``).
+    rl = spec.rlhf
+    if rl is not None:
+        if rl.beta is not None:
+            argv += ["--beta", str(rl.beta)]
+        if rl.reward_model is not None:
+            argv += ["--reward_model", rl.reward_model]
+        if rl.reward_funcs:
+            argv += ["--reward_funcs", *rl.reward_funcs]
+        if rl.num_generations is not None:
+            argv += ["--num_generations", str(rl.num_generations)]
+        if rl.max_completion_length is not None:
+            argv += ["--max_completion_length", str(rl.max_completion_length)]
+        if rl.temperature is not None:
+            argv += ["--temperature", str(rl.temperature)]
+
     argv += ["--output_dir", str(output_dir)]
     argv += ["--report_to", "mlflow"]
 
