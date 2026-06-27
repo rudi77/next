@@ -1,8 +1,9 @@
 """MCP server that exposes trainpipe operations as tools.
 
 Wraps the REST API at ``TRAINPIPE_BASE_URL`` with ``TRAINPIPE_API_KEY``.
-Tools cover experiments, studies, GPUs, and datasets — the same surface
-a human would drive via ``curl``.
+Tools cover experiments, studies, GPUs, datasets, the model registry,
+inference, and evals — the full train → eval → improve loop an agent
+needs, the same surface a human would drive via ``curl``.
 
 Run standalone (e.g. for `claude mcp add`):
 
@@ -20,10 +21,12 @@ Add to Claude Code:
 from __future__ import annotations
 
 import base64
-import os
 from typing import Any
 
 import httpx
+
+from .client import MissingAPIKey, build_client
+from .client import unwrap as _unwrap
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -32,36 +35,6 @@ except ImportError as exc:  # pragma: no cover
         "trainpipe.mcp requires the 'mcp' package. "
         "Install with: pip install -e \".[mcp]\""
     ) from exc
-
-
-def _build_client() -> httpx.Client:
-    base_url = os.environ.get("TRAINPIPE_BASE_URL", "http://127.0.0.1:8080")
-    api_key = os.environ.get("TRAINPIPE_API_KEY")
-    if not api_key:
-        raise SystemExit(
-            "TRAINPIPE_API_KEY environment variable must be set "
-            "(use the same value you put in trainpipe's .env)"
-        )
-    return httpx.Client(
-        base_url=base_url,
-        headers={"X-API-Key": api_key},
-        timeout=httpx.Timeout(30.0, connect=5.0),
-    )
-
-
-def _unwrap(resp: httpx.Response) -> Any:
-    """Raise on HTTP errors; return parsed body for JSON, text otherwise."""
-    if resp.is_error:
-        # Re-raise with body preserved so MCP clients see the actionable detail.
-        try:
-            detail = resp.json()
-        except ValueError:
-            detail = resp.text
-        raise RuntimeError(f"HTTP {resp.status_code}: {detail}")
-    ctype = resp.headers.get("content-type", "")
-    if ctype.startswith("application/json"):
-        return resp.json()
-    return resp.text
 
 
 mcp = FastMCP("trainpipe")
@@ -76,7 +49,10 @@ def _get_client() -> httpx.Client:
     """
     global _client
     if _client is None:
-        _client = _build_client()
+        try:
+            _client = build_client()
+        except MissingAPIKey as e:
+            raise SystemExit(str(e)) from e
     return _client
 
 
@@ -381,6 +357,120 @@ def inference_compare(
                 "params": {"max_new_tokens": max_new_tokens},
             },
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Evals (Phase 6) — the measure half of the train → eval → improve loop
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def create_eval_suite(spec: dict) -> dict:
+    """Create a reusable eval suite. Returns the persisted EvalSuite.
+
+    ``spec`` follows EvalSuiteSpec: ``name``, ``dataset`` (a ``ds:<id>``
+    ref or path), ``metrics`` (list of ``{"kind": ..., "name"?: ...,
+    "config"?: {...}}`` — kinds include ``exact_match``, ``bleu``,
+    ``rouge_l``, ``field_level_f1``, ``structured_extraction_f1``,
+    ``bbox_iou``, ``llm_as_judge``), optional ``description`` and
+    ``inference_params`` (max_new_tokens, temperature, top_p,
+    sample_limit, batch_size). Fails 409 if ``name`` already exists.
+    """
+    return _unwrap(_get_client().post("/evals/suites", json=spec))
+
+
+@mcp.tool()
+def list_eval_suites() -> list[dict]:
+    """List eval suites, newest first."""
+    return _unwrap(_get_client().get("/evals/suites"))
+
+
+@mcp.tool()
+def get_eval_suite(suite_id: str) -> dict:
+    """Return one eval suite (resolved dataset_path, metrics, params)."""
+    return _unwrap(_get_client().get(f"/evals/suites/{suite_id}"))
+
+
+@mcp.tool()
+def delete_eval_suite(suite_id: str, force: bool = False) -> dict:
+    """Delete an eval suite. Refuses 409 if a non-terminal run references
+    it unless ``force=True``."""
+    return _unwrap(
+        _get_client().delete(
+            f"/evals/suites/{suite_id}", params={"force": str(force).lower()}
+        )
+    )
+
+
+@mcp.tool()
+def run_eval(suite_id: str, experiment_id: str) -> dict:
+    """Enqueue an eval run of ``suite_id`` against a completed experiment.
+
+    The dispatcher picks it up on its next tick; poll ``get_eval_run`` for
+    ``status`` (queued → running → completed/failed) and read ``aggregate``
+    for the per-metric means. Returns the created EvalRun.
+    """
+    return _unwrap(
+        _get_client().post(
+            "/evals/runs",
+            json={"suite_id": suite_id, "experiment_id": experiment_id},
+        )
+    )
+
+
+@mcp.tool()
+def list_eval_runs(
+    suite_id: str | None = None,
+    experiment_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """List eval runs, optionally filtered by suite_id, experiment_id, and/or
+    status (queued, running, completed, failed, cancelled)."""
+    params: dict[str, Any] = {"limit": limit}
+    if suite_id:
+        params["suite_id"] = suite_id
+    if experiment_id:
+        params["experiment_id"] = experiment_id
+    if status:
+        params["status"] = status
+    return _unwrap(_get_client().get("/evals/runs", params=params))
+
+
+@mcp.tool()
+def get_eval_run(run_id: str) -> dict:
+    """Return one eval run, including ``status`` and the per-metric
+    ``aggregate`` (mean/std/count) once it has completed."""
+    return _unwrap(_get_client().get(f"/evals/runs/{run_id}"))
+
+
+@mcp.tool()
+def get_eval_results(run_id: str, limit: int = 500) -> list[dict]:
+    """Return per-sample results for a run (input, gold, prediction, scores,
+    error). Use this to inspect *which* samples regressed, not just the
+    aggregate."""
+    return _unwrap(
+        _get_client().get(f"/evals/runs/{run_id}/results", params={"limit": limit})
+    )
+
+
+@mcp.tool()
+def cancel_eval_run(run_id: str) -> dict:
+    """Request cancellation of a queued or running eval run."""
+    return _unwrap(_get_client().post(f"/evals/runs/{run_id}/cancel"))
+
+
+@mcp.tool()
+def compare_evals(run_ids: list[str]) -> dict:
+    """Compare 2+ eval runs against the same suite. Returns per-metric
+    ``aggregate_delta`` (mean per run) and the ``regressions`` list —
+    samples where runs disagree. Use this to decide whether a retrained
+    model actually improved over the previous version."""
+    if len(run_ids) < 2:
+        raise RuntimeError("compare_evals requires at least two run_ids")
+    return _unwrap(
+        _get_client().get("/evals/compare", params={"run_ids": ",".join(run_ids)})
     )
 
 

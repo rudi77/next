@@ -1,0 +1,51 @@
+# next / trainpipe — Implementierungsfortschritt
+
+Ziel: Die im Architektur-Review identifizierten Lücken gegen die Produktziele
+schließen (einfaches Training von FT/Pretraining/RL/GRPO/HP-Tuning, voll über
+UI bedienbar, CLI + MCP agent-tauglich).
+
+Branch: claude/simplify-b94tk5
+Vorgehen: pro Punkt -> implementieren -> /simplify -> committen -> dieses File updaten.
+
+## Status: ALLE PUNKTE ABGESCHLOSSEN ✅
+
+0. [DONE] MCP-Eval-Tools (train->eval->improve-Loop fuer Agents)  — commit 0d3716e
+   - 10 Eval-Tools im MCP (create_eval_suite, run_eval, get_eval_results,
+     compare_evals, ...). Schliesst den Agent-Loop.
+
+1. [DONE] RL/GRPO erstklassig  — commit 7238b78
+   - RLHFHyperparameters (beta, reward_model, reward_funcs, num_generations,
+     max_completion_length, temperature) -> swift rlhf-Flags.
+   - ExperimentSpec._check_rlhf-Validator: reward-Signal fuer ppo/grpo am
+     Submit erzwungen; GRPO-only-Knobs gekapselt; rlhf fuer non-RLHF verboten.
+   - swift_builder bleibt reine Translation-Schicht.
+
+2. [DONE] Pretraining-Pfad  — commit cb1ef30
+   - 'pt' in TrainKind; swift_builder routet auf `swift pt` (LoRA + full).
+   - is_pretrain-Erkennung (text-Feld) in dataset_formats, informativ.
+
+3. [DONE] Operative CLI  — commit b075e45
+   - trainpipe/client.py (shared httpx-Client + unwrap), von CLI UND MCP genutzt.
+   - trainpipe/cli.py: serve (default) + voller Satz operativer Subcommands
+     (submit/experiments/get/cancel/logs/datasets/upload/models/register-model/
+     set-alias/inference/studies/gpus/eval-* /run-eval/compare-evals) plus
+     generischer `api METHOD PATH` fuer volle Parity. JSON-Ausgabe.
+
+4. [DONE] UI  — commit e372846
+   - Experiment-Form: 'pt'-Trainingstyp + bedingtes RL/Preference-Panel
+     (beta, reward_model, reward_funcs, num_generations, max_completion_length,
+     temperature) fuer die rlhf-Familie; buildRlhf() schickt nur gesetzte Felder.
+   - Pipelines-Tab: "New pipeline"-Modal mit SFT->DPO-Beispiel (PipelineConfig).
+
+## Verifikation
+- Volle Testsuite gruen: 507 Tests.
+- ruff sauber auf allen geaenderten Dateien (41 pre-existing Repo-Fehler unberuehrt).
+- UI-Inline-JS via `node --check` validiert.
+- Jeder Punkt durchlief /simplify (4 Cleanup-Agents) vor dem Commit.
+
+## Log
+- 2026-06-27: Review abgeschlossen. Punkt 0 (MCP-Eval-Tools) gepusht (0d3716e).
+- 2026-06-27: Punkt 1 (RL/GRPO) + /simplify + commit 7238b78.
+- 2026-06-27: Punkt 2 (Pretraining) + /simplify + commit cb1ef30.
+- 2026-06-27: Punkt 3 (CLI) + /simplify + commit b075e45.
+- 2026-06-27: Punkt 4 (UI) + /simplify + commit e372846. Alle Punkte fertig.

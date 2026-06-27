@@ -88,11 +88,30 @@ cp .env.example .env
 # edit TRAINPIPE_API_KEY, optionally TRAINPIPE_VISIBLE_GPUS
 
 # 4. Run
-trainpipe                           # uvicorn on :8080
+trainpipe                           # uvicorn on :8080 (no subcommand = serve)
 ```
 </details>
 
 Health check: `curl http://localhost:8080/health`.
+
+### Driving it from the terminal
+
+`trainpipe` is also an operative client over the REST API — the same surface
+the MCP server gives agents — so you can run the full train → eval → improve
+loop without hand-writing `curl`. Operative subcommands need
+`TRAINPIPE_API_KEY` (and optionally `TRAINPIPE_BASE_URL`) set; output is JSON
+on stdout for piping into `jq`.
+
+```bash
+trainpipe submit --model Qwen/Qwen2.5-0.5B --dataset ds:ab12 --train-kind sft
+trainpipe experiments --status running
+trainpipe logs <exp-id> -n 50
+trainpipe register-model --name my-model --experiment <exp-id> --alias staging
+trainpipe run-eval --suite <suite-id> --experiment <exp-id>
+trainpipe compare-evals <run-a> <run-b>
+trainpipe inference my-model@staging "Summarize: ..."
+trainpipe api GET /datasets/<id>/models   # generic escape hatch: any endpoint
+```
 
 ## Deployment
 

@@ -38,6 +38,10 @@ class FormatInfo:
     # that ``swift rlhf`` expects (Phase 13). Detection is sample-based
     # so a partially-converted dataset returns False.
     is_preference: bool = False
+    # JSONL only: True if every sampled record is a single non-empty
+    # ``text`` field — the raw-text shape ``swift pt`` (continued
+    # pretraining) expects. Sample-based like ``is_preference``.
+    is_pretrain: bool = False
 
 
 def detect_and_validate(path: Path) -> tuple[str, int | None]:
@@ -60,12 +64,13 @@ def detect_and_validate_info(path: Path) -> FormatInfo:
     """
     suffix = path.suffix.lower().lstrip(".")
     if suffix in ("jsonl", "ndjson"):
-        line_count, media_kinds, is_preference = _validate_jsonl(path)
+        line_count, media_kinds, is_preference, is_pretrain = _validate_jsonl(path)
         return FormatInfo(
             "jsonl",
             line_count,
             media_kinds=media_kinds,
             is_preference=is_preference,
+            is_pretrain=is_pretrain,
         )
     if suffix == "json":
         return FormatInfo("json", _validate_json(path))
@@ -85,11 +90,12 @@ _MEDIA_FIELDS = ("images", "videos", "audios")
 _PREFERENCE_FIELDS = ("prompt", "chosen", "rejected")
 
 
-def _validate_jsonl(path: Path) -> tuple[int, list[str], bool]:
+def _validate_jsonl(path: Path) -> tuple[int, list[str], bool, bool]:
     total = 0
     seen_media: set[str] = set()
     sampled = 0
     preference_hits = 0
+    pretrain_hits = 0
     with path.open("r", encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
             line = raw.strip()
@@ -113,16 +119,21 @@ def _validate_jsonl(path: Path) -> tuple[int, list[str], bool]:
                         for k in _PREFERENCE_FIELDS
                     ):
                         preference_hits += 1
+                    text = record.get("text")
+                    if isinstance(text, str) and text:
+                        pretrain_hits += 1
             total += 1
     if total == 0:
         raise DatasetFormatError("jsonl file is empty")
-    # Preference shape only if *every* sampled record matches — a mixed
+    # A shape is claimed only if *every* sampled record matches — a mixed
     # file is almost always a sign of accidental concatenation.
     is_preference = sampled > 0 and preference_hits == sampled
+    is_pretrain = sampled > 0 and pretrain_hits == sampled
     return (
         total,
         [k for k in _MEDIA_FIELDS if k in seen_media],
         is_preference,
+        is_pretrain,
     )
 
 

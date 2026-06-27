@@ -44,15 +44,19 @@ def build_swift_command(
     if not gpu_ids:
         raise ValueError("gpu_ids must contain at least one GPU index")
 
-    # Phase 13: switch sub-command for *PO trainers. ``swift rlhf`` is
-    # the entry point for DPO/KTO/PPO/GRPO; everything else stays on
-    # ``swift sft``. The flags after this point are identical across
-    # both — they consume the same ExperimentSpec — except we add
-    # ``--rlhf_type`` for the RLHF family.
+    # Phase 13: pick the ms-swift sub-command from the train kind.
+    # ``swift sft`` is instruction tuning, ``swift pt`` is (continued)
+    # pretraining on raw text, and ``swift rlhf`` is the entry point for
+    # the preference/RL family (DPO/KTO/PPO/GRPO). The flags after this
+    # point are identical across all three — they consume the same
+    # ExperimentSpec — except we add ``--rlhf_type`` for the RLHF family.
+    swift = _resolve_swift_binary()
     if spec.train_kind == "sft":
-        argv: list[str] = [_resolve_swift_binary(), "sft"]
+        argv: list[str] = [swift, "sft"]
+    elif spec.train_kind == "pt":
+        argv = [swift, "pt"]
     else:
-        argv = [_resolve_swift_binary(), "rlhf", "--rlhf_type", spec.train_kind]
+        argv = [swift, "rlhf", "--rlhf_type", spec.train_kind]
 
     # ms-swift v4 renamed --model_id_or_path → --model, --sft_type → --tuner_type
     # (and --lora_target_modules → --target_modules below).
@@ -88,6 +92,26 @@ def build_swift_command(
         argv += ["--lora_dropout", str(hp.lora_dropout)]
         for tm in hp.lora_target_modules:
             argv += ["--target_modules", tm]
+
+    # Phase 13: RL / preference knobs for the ``swift rlhf`` family. The
+    # spec validator guarantees these only appear for non-sft kinds and
+    # that PPO/GRPO carry a reward signal, so we just translate whatever
+    # is set into flags. ``reward_funcs`` is emitted as one flag followed
+    # by all values (ms-swift's argparse uses ``nargs='+'``).
+    rl = spec.rlhf
+    if rl is not None:
+        if rl.beta is not None:
+            argv += ["--beta", str(rl.beta)]
+        if rl.reward_model is not None:
+            argv += ["--reward_model", rl.reward_model]
+        if rl.reward_funcs:
+            argv += ["--reward_funcs", *rl.reward_funcs]
+        if rl.num_generations is not None:
+            argv += ["--num_generations", str(rl.num_generations)]
+        if rl.max_completion_length is not None:
+            argv += ["--max_completion_length", str(rl.max_completion_length)]
+        if rl.temperature is not None:
+            argv += ["--temperature", str(rl.temperature)]
 
     argv += ["--output_dir", str(output_dir)]
     argv += ["--report_to", "mlflow"]

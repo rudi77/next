@@ -51,6 +51,17 @@ async def test_expected_tools_are_registered():
         "inference_compare",
         "synth_dataset",
         "forget_scan",
+        # Evals (Phase 6) — closes the train → eval → improve loop for agents.
+        "create_eval_suite",
+        "list_eval_suites",
+        "get_eval_suite",
+        "delete_eval_suite",
+        "run_eval",
+        "list_eval_runs",
+        "get_eval_run",
+        "get_eval_results",
+        "cancel_eval_run",
+        "compare_evals",
     }
     missing = expected - names
     assert not missing, f"missing tools: {missing}"
