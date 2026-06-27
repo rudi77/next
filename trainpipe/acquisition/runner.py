@@ -21,11 +21,12 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..api.schemas import AcquisitionSpec
+from ..redaction.redactor import redact_record
 from ..synth.runner import FatalHTTPError, SynthAborted, SynthProvider
 from .web import GateDecision, SearchProvider, TextFetcher
 
@@ -264,6 +265,10 @@ def acquire_records(
             page_text=text[:_MAX_PAGE_CHARS],
         )
         for i in range(records_per_source):
+            # Poll per call (not just per source) so a call budget bounds spend
+            # tightly rather than overshooting by up to records_per_source.
+            if should_stop is not None and should_stop():
+                return records
             try:
                 raw = provider.generate(prompt, model=model, max_tokens=max_tokens)
             except Exception as e:
@@ -387,18 +392,35 @@ def synthesize_records(
 # ---------------------------------------------------------------------------
 
 
-def curate(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """Phase 4 (MVP slice): exact-duplicate dedup.
+@dataclass
+class CurateStats:
+    """What the curate phase did — grows a field per future filter rather than
+    a positional tuple slot."""
 
-    Returns ``(curated, dropped)``. Dedup key is the normalized
-    (prompt, completion) pair — near-dup detection, language/quality filters
-    and PII-redaction join here in the hardening phase. Order is preserved so
+    dropped: int = 0
+    redaction: dict[str, int] = field(default_factory=dict)
+
+
+def curate(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], CurateStats]:
+    """Phase 4: mandatory PII-redaction, then exact-duplicate dedup.
+
+    Returns ``(curated, stats)``. Redaction runs first and is non-optional —
+    the design invariant is that no PII reaches a registered dataset. Redacting
+    before dedup means records that differ only in redacted PII collapse
+    together. Dedup key is the (prompt, completion) pair; order is preserved so
     the output is reproducible.
     """
+    redaction_counts: dict[str, int] = {}
     seen: set[tuple[str, str]] = set()
     curated: list[dict[str, Any]] = []
     dropped = 0
     for rec in records:
+        rec, hits = redact_record(rec)
+        for entity, n in hits.items():
+            if n:
+                redaction_counts[entity] = redaction_counts.get(entity, 0) + n
         key = (
             str(rec.get("prompt", "")).strip(),
             str(rec.get("completion", "")).strip(),
@@ -408,7 +430,7 @@ def curate(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
             continue
         seen.add(key)
         curated.append(rec)
-    return curated, dropped
+    return curated, CurateStats(dropped=dropped, redaction=redaction_counts)
 
 
 def write_records_jsonl(records: list[dict[str, Any]], path: Path) -> int:

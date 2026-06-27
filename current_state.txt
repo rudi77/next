@@ -16,7 +16,11 @@ Vorgehen: pro Stufe -> implementieren -> /simplify -> committen -> dieses File u
        (Kam mit Stufe 1, weil intrinsisch zur State-Machine.)
 3. [DONE] Research/Acquire real: SearchProvider (mock/Tavily) + Extractor
        (trafilatura/SimpleExtractor) + Robots/Lizenz/SSRF-Gate; [acquisition]-Extra.
-4. [ ] Härtung: Redaction-Pflichtstufe, Cost-Budget, Lineage-Snapshots, UI-Tab.
+4. [DONE] Härtung: Redaction-Pflichtstufe (curate, rekursiv), Cost-Budget
+       (max_llm_calls), strict_license-Knopf, Lineage via Provenance +
+       acquisition_runs.dataset_id, UI-Tab.
+
+## ALLE 4 STUFEN ABGESCHLOSSEN ✅
 
 ## Was steht (Stufe 1+2)
 
@@ -64,16 +68,33 @@ Vorgehen: pro Stufe -> implementieren -> /simplify -> committen -> dieses File u
 - Tests: +9 (web-Primitiven, Gate robots/SSRF/Lizenz, research/acquire,
   Driver-Web-Pfad). Gesamt 531 passed.
 
-## Bekannte Folgearbeit (für Stufe 4 bzw. globale Cleanups)
+## Was steht (Stufe 4 — Härtung)
+
+- Redaction-Pflichtstufe: curate redaktiert jeden Record (rekursiv via
+  redaction.redact_record/_walk_redact) VOR Dedup+Register; Hit-Counts
+  persistiert (redaction_json). Verschachtelte PII (Chat-Format) erfasst.
+- Cost-Budget: _BudgetProvider zählt LLM-Calls, max_llm_calls kappt
+  Synthese+Acquire (per-Call gepollt, kein Overshoot).
+- strict_license: Gate-Knopf, überspringt Quellen mit unbestätigter Lizenz.
+- Lineage: Provenance-String + acquisition_runs.dataset_id (Run→Dataset)
+  + acquisition_sources (Run→URLs). dataset_lineage-Tabelle nicht nutzbar
+  (kein Parent-Dataset bei Web-Quellen).
+- curate gibt CurateStats-Dataclass zurück (statt 3-Tuple).
+- Migration v16: strict_license + max_llm_calls + redaction_json.
+- UI: Acquisition-Tab (Brief-Form, Runs-Liste mit Status/Phase,
+  Cancel/Answer für awaiting_input). MCP get_acquisition_sources.
+- Tests gesamt: 536 passed, 1 skipped.
+
+## Bekannte Folgearbeit (globale Cleanups, modulübergreifend)
 
 - Reuse: synth.generate_synthetic Failure-Loop und JSON-Extract aus
-  evals/metrics/llm_as_judge konsolidieren (modulübergreifend).
-- Effizienz: pooled httpx.Client + concurrent fetch über research/acquire.
-- Altitude: strict_license als Operator-Knopf plumben (Stufe 4); evtl.
-  recover_stale_runs analog active_learning.
+  evals/metrics/llm_as_judge konsolidieren.
+- Effizienz: pooled httpx.Client + concurrent fetch über research/acquire;
+  redact_text Doppelpass (count+sub) in redactor.py zusammenfassen.
 
 ## Log
 
 - 2026-06-27: Design-Doc committet (docs/spec/agentic-data-acquisition.md).
 - 2026-06-27: Stufe 1+2 implementiert + /simplify + Commit 9c73ab7.
-- 2026-06-27: Stufe 3 (Web-Research/Acquire) + /simplify + Commit folgt.
+- 2026-06-27: Stufe 3 (Web-Research/Acquire) + /simplify + Commit 9dd26d7.
+- 2026-06-27: Stufe 4 (Härtung + UI) + /simplify + Commit folgt. FERTIG.

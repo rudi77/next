@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from typing import Literal
+from typing import Any, Literal
 
 EntityKind = Literal["email", "phone", "iban", "credit_card", "de_tax_id"]
 
@@ -167,6 +167,20 @@ def _walk_redact(obj, entities, counts):
     if isinstance(obj, dict):
         return {k: _walk_redact(v, entities, counts) for k, v in obj.items()}
     return obj
+
+
+def redact_record(
+    record: Any, entities: Iterable[EntityKind] | None = None
+) -> tuple[Any, dict[EntityKind, int]]:
+    """Redact every string value in a record, recursing into nested
+    lists/dicts. Returns ``(redacted_record, hit_counts)``.
+
+    The single-record analogue of :func:`redact_jsonl`, sharing the same
+    recursive walker so in-memory and file-based redaction can't diverge.
+    """
+    counts: dict[EntityKind, int] = {}
+    redacted = _walk_redact(record, tuple(entities or DEFAULT_ENTITY_KINDS), counts)
+    return redacted, counts
 
 
 def redact_jsonl(

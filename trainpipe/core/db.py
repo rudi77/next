@@ -414,6 +414,17 @@ MIGRATIONS: list[str] = [
     ALTER TABLE acquisition_runs ADD COLUMN search_provider TEXT NOT NULL DEFAULT 'none';
     ALTER TABLE acquisition_runs ADD COLUMN max_sources INTEGER NOT NULL DEFAULT 0;
     """,
+    # v16: acquisition hardening (Phase 22 stage 4). ``strict_license``
+    # rejects "unknown"-license web sources at the gate (compliance posture);
+    # ``max_llm_calls`` caps total teacher-LLM calls across the synthesize +
+    # acquire phases so a run can't burn an unbounded budget (0 = unlimited).
+    # ``redaction_json`` records the PII-redaction hit counts the mandatory
+    # curate step produced, for the audit trail. Defaults preserve behavior.
+    """
+    ALTER TABLE acquisition_runs ADD COLUMN strict_license INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE acquisition_runs ADD COLUMN max_llm_calls INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE acquisition_runs ADD COLUMN redaction_json TEXT;
+    """,
 ]
 
 

@@ -134,8 +134,9 @@ def test_curate_dedups_exact_pairs():
         {"prompt": "a", "completion": "1"},
         {"prompt": "b", "completion": "2"},
     ]
-    curated, dropped = runner.curate(records)
-    assert dropped == 1
+    curated, stats = runner.curate(records)
+    assert stats.dropped == 1
+    assert stats.redaction == {}  # no PII in these records
     assert curated == [
         {"prompt": "a", "completion": "1"},
         {"prompt": "b", "completion": "2"},
@@ -474,3 +475,85 @@ async def test_driver_web_path_records_sources_and_real_records(db, monkeypatch)
     assert all(s.used for s in sources)
     # raw_count includes real records on top of the 4 synthesized ones.
     assert run.raw_count > 4
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — hardening (mandatory redaction, cost budget, strict license)
+# ---------------------------------------------------------------------------
+
+
+def test_curate_redacts_pii():
+    records = [
+        {"prompt": "mail me at john@example.com", "completion": "ok"},
+        {"prompt": "clean", "completion": "also clean"},
+    ]
+    curated, stats = runner.curate(records)
+    assert stats.dropped == 0
+    assert stats.redaction.get("email") == 1
+    assert "john@example.com" not in curated[0]["prompt"]
+    assert "[REDACTED_EMAIL]" in curated[0]["prompt"]
+
+
+def test_curate_redacts_nested_pii():
+    # Chat-format records nest PII inside a list of message dicts; the shared
+    # recursive walker must reach it (a top-level-only walk would miss it).
+    records = [{"messages": [{"role": "user", "content": "ping a@b.com"}]}]
+    curated, stats = runner.curate(records)
+    assert stats.redaction.get("email") == 1
+    assert "a@b.com" not in curated[0]["messages"][0]["content"]
+
+
+async def test_driver_persists_redaction_counts(db, monkeypatch):
+    # Force the synthesizer to emit a record containing an email.
+    provider = _json_provider({"prompt": "reach me: a@b.com", "completion": "fine"})
+    monkeypatch.setattr(
+        "trainpipe.acquisition.driver.make_provider", lambda _name: provider
+    )
+    run_id = await _create_run(db, target_count=3)
+    await AcquisitionDriver(run_id, db)._run()
+    async with db.connect() as conn:
+        run = await repository.get_acquisition_run(conn, run_id)
+    assert run.status == AcquisitionStatus.COMPLETED
+    assert run.redaction and run.redaction.get("email", 0) >= 1
+
+
+async def test_cost_budget_caps_llm_calls(db, monkeypatch):
+    # Count how many times the provider is asked to generate.
+    calls = {"n": 0}
+
+    class _Counting(MockProvider):
+        def generate(self, prompt, *, model, max_tokens):
+            calls["n"] += 1
+            return super().generate(prompt, model=model, max_tokens=max_tokens)
+
+    monkeypatch.setattr(
+        "trainpipe.acquisition.driver.make_provider", lambda _name: _Counting()
+    )
+    async with db.connect() as conn:
+        run_id = await repository.create_acquisition_run(
+            conn,
+            name="budget",
+            brief="x",
+            provider="mock",
+            model="mock",
+            target_count=100,
+            max_llm_calls=5,
+        )
+    await AcquisitionDriver(run_id, db)._run()
+    # Synthesize stops once the budget is hit; intake (1 call) + at most the
+    # budget for synthesis.
+    assert calls["n"] <= 6
+    async with db.connect() as conn:
+        run = await repository.get_acquisition_run(conn, run_id)
+    assert run.raw_count <= 5
+
+
+def test_strict_license_skips_unknown_sources():
+    spec = AcquisitionSpec(domain="d", target_capabilities=["x"], target_count=1)
+    provider = web.MockSearchProvider([web.SearchHit(url="https://example.com/a")])
+    gate = web.make_fetch_gate(
+        strict_license=True, robots_fetcher=lambda _u: None, url_safety=lambda _u: True
+    )
+    sources = research_sources(provider, gate, spec, max_sources=5)
+    assert len(sources) == 1
+    assert sources[0].allowed is False  # unknown license, strict mode → blocked

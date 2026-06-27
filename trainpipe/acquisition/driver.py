@@ -25,7 +25,7 @@ from ..api.schemas import AcquisitionSpec, AcquisitionStatus
 from ..core import repository
 from ..core.db import Database
 from ..settings import settings
-from ..synth.runner import SynthAborted, make_provider
+from ..synth.runner import SynthAborted, SynthProvider, make_provider
 from .runner import (
     acquire_records,
     curate,
@@ -42,6 +42,28 @@ from .web import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _BudgetProvider(SynthProvider):
+    """Wraps a provider to count generate() calls and enforce a per-run cap.
+
+    The phases poll :meth:`exhausted` via their ``should_stop`` hook and stop
+    once the budget is reached, so ``max_llm_calls`` bounds total teacher-LLM
+    spend across synthesize + acquire. ``max_calls=0`` means unlimited.
+    """
+
+    def __init__(self, inner: SynthProvider, max_calls: int) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.max_calls = max_calls
+        self.calls = 0
+
+    def generate(self, prompt: str, *, model: str, max_tokens: int) -> str:
+        self.calls += 1
+        return self.inner.generate(prompt, model=model, max_tokens=max_tokens)
+
+    def exhausted(self) -> bool:
+        return self.max_calls > 0 and self.calls >= self.max_calls
 
 
 class AcquisitionDriver:
@@ -83,7 +105,13 @@ class AcquisitionDriver:
             if run is None:
                 return
             await self._set(status=AcquisitionStatus.RUNNING)
-            provider = make_provider(run.provider)
+            provider = _BudgetProvider(make_provider(run.provider), run.max_llm_calls)
+
+            # budget_stop ends *generating* once the call budget is spent; the
+            # inter-phase `self._stop` checks below are raw cancellation only
+            # (a spent budget shouldn't abort the pipeline, just cap new calls).
+            def budget_stop() -> bool:
+                return self._stop.is_set() or provider.exhausted()
 
             # --- Phase 1: Intake -------------------------------------------
             spec = run.spec
@@ -116,7 +144,9 @@ class AcquisitionDriver:
             # synthesized ones below and deduped in curate.
             real_records: list[dict] = []
             if run.search_provider != "none":
-                real_records = await self._research_and_acquire(run, spec, provider)
+                real_records = await self._research_and_acquire(
+                    run, spec, provider, budget_stop
+                )
                 if self._stop.is_set():
                     return
 
@@ -133,21 +163,23 @@ class AcquisitionDriver:
                 model=run.model,
                 spec=synth_spec,
                 answers=run.answers,
-                should_stop=self._stop.is_set,
+                should_stop=budget_stop,
             )
             records = real_records + records
             await self._set(raw_count=len(records))
             if self._stop.is_set():
                 return
 
-            # --- Phase 4: Curate -------------------------------------------
+            # --- Phase 4: Curate (mandatory PII-redaction + dedup) ---------
             await self._set(phase="curate")
-            curated, dropped = curate(records)
-            if dropped:
+            curated, stats = curate(records)
+            await self._set(redaction=stats.redaction)
+            if stats.dropped or stats.redaction:
                 logger.info(
-                    "acquisition=%s curate dropped %d duplicate(s)",
+                    "acquisition=%s curate dropped %d dup(s), redacted %d PII hit(s)",
                     self.run_id,
-                    dropped,
+                    stats.dropped,
+                    sum(stats.redaction.values()),
                 )
             if not curated:
                 raise ValueError(
@@ -185,13 +217,15 @@ class AcquisitionDriver:
         finally:
             logger.info("acquisition=%s driver exit", self.run_id)
 
-    async def _research_and_acquire(self, run, spec, provider) -> list[dict]:
+    async def _research_and_acquire(
+        self, run, spec, provider, should_stop
+    ) -> list[dict]:
         """Phases 2+3a: find candidate sources, gate them, fetch the allowed
         ones, and distil grounded records. Persists the full source ledger
         (allowed and skipped) with the per-source ``used`` flag."""
         await self._set(phase="research")
         search = make_search_provider(run.search_provider)
-        gate = make_fetch_gate()
+        gate = make_fetch_gate(strict_license=run.strict_license)
         sources = await asyncio.to_thread(
             research_sources, search, gate, spec, max_sources=run.max_sources
         )
@@ -205,7 +239,7 @@ class AcquisitionDriver:
             sources=sources,
             spec=spec,
             fetch_text=fetch_text,
-            should_stop=self._stop.is_set,
+            should_stop=should_stop,
         )
 
         # acquire_records marked each fetched source's ``used`` flag in place.
@@ -260,7 +294,8 @@ class AcquisitionDriver:
 
         provenance = (
             f"acquired via {provider}:{model} for domain={spec.domain!r} "
-            f"({len(records)} records, format={spec.format})"
+            f"({len(records)} records, format={spec.format}; "
+            f"acquisition_run={self.run_id})"
         )
 
         async with self.db.connect() as conn:

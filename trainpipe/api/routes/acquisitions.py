@@ -58,6 +58,8 @@ async def create_acquisition(
         target_count=target_count,
         search_provider=request.search_provider,
         max_sources=request.max_sources,
+        strict_license=request.strict_license,
+        max_llm_calls=request.max_llm_calls,
         spec=request.spec,
     )
 

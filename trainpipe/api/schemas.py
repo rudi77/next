@@ -748,6 +748,11 @@ class AcquisitionRequest(BaseModel):
     # no network); ``mock`` / ``tavily`` enable the research + acquire phases.
     search_provider: Literal["none", "mock", "tavily"] = "none"
     max_sources: int = Field(5, ge=0, le=50)
+    # Hardening (stage 4). ``strict_license`` skips web sources whose license
+    # the gate can't confirm as open. ``max_llm_calls`` caps total teacher-LLM
+    # calls across synthesize + acquire (0 = unlimited).
+    strict_license: bool = False
+    max_llm_calls: int = Field(0, ge=0, le=1000000)
     # Optional pre-filled spec (interactive/MCP path): when supplied the
     # intake phase is skipped and the run starts already-clarified.
     spec: AcquisitionSpec | None = None
@@ -770,6 +775,10 @@ class AcquisitionRun(BaseModel):
     target_count: int
     search_provider: str = "none"
     max_sources: int = 0
+    strict_license: bool = False
+    max_llm_calls: int = 0
+    # PII-redaction hit counts from the mandatory curate step (entity → count).
+    redaction: dict[str, int] | None = None
     spec: AcquisitionSpec | None = None
     answers: dict[str, str] | None = None
     status: AcquisitionStatus

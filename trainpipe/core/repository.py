@@ -1898,6 +1898,11 @@ def _row_to_acquisition_run(row: aiosqlite.Row) -> AcquisitionRun:
         target_count=row["target_count"],
         search_provider=row["search_provider"],
         max_sources=row["max_sources"],
+        strict_license=bool(row["strict_license"]),
+        max_llm_calls=row["max_llm_calls"],
+        redaction=(
+            json.loads(row["redaction_json"]) if row["redaction_json"] else None
+        ),
         spec=(
             AcquisitionSpec.model_validate_json(row["spec_json"])
             if row["spec_json"]
@@ -1926,6 +1931,8 @@ async def create_acquisition_run(
     target_count: int,
     search_provider: str = "none",
     max_sources: int = 0,
+    strict_license: bool = False,
+    max_llm_calls: int = 0,
     spec: AcquisitionSpec | None = None,
     run_id: str | None = None,
 ) -> str:
@@ -1934,8 +1941,9 @@ async def create_acquisition_run(
     now = utcnow_iso()
     await conn.execute(
         "INSERT INTO acquisition_runs (id, name, brief, provider, model, "
-        "target_count, search_provider, max_sources, spec_json, status, "
-        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+        "target_count, search_provider, max_sources, strict_license, "
+        "max_llm_calls, spec_json, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
         (
             run_id,
             name,
@@ -1945,6 +1953,8 @@ async def create_acquisition_run(
             target_count,
             search_provider,
             max_sources,
+            int(strict_license),
+            max_llm_calls,
             spec.model_dump_json() if spec else None,
             now,
         ),
@@ -2009,6 +2019,7 @@ async def update_acquisition_run(
     dataset_id: str | None = None,
     raw_count: int | None = None,
     final_count: int | None = None,
+    redaction: dict[str, int] | None = None,
     error: str | None = None,
 ) -> None:
     fields: list[str] = []
@@ -2022,6 +2033,7 @@ async def update_acquisition_run(
         "dataset_id": dataset_id,
         "raw_count": raw_count,
         "final_count": final_count,
+        "redaction_json": json.dumps(redaction) if redaction is not None else None,
         "error": error,
     }
     if status is not None:

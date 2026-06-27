@@ -530,6 +530,8 @@ def start_acquisition(
     target_count: int = 50,
     search_provider: str = "none",
     max_sources: int = 5,
+    strict_license: bool = False,
+    max_llm_calls: int = 0,
     spec: dict | None = None,
 ) -> dict:
     """Start building a training dataset from a natural-language brief.
@@ -547,7 +549,10 @@ def start_acquisition(
 
     ``search_provider``: ``none`` (synthesize only, no network — default),
     ``mock``, or ``tavily`` (real web research + acquisition, gated by
-    robots.txt + a license heuristic). ``max_sources`` caps candidate URLs."""
+    robots.txt + a license heuristic). ``max_sources`` caps candidate URLs.
+    ``strict_license`` skips web sources whose license can't be confirmed
+    open; ``max_llm_calls`` caps total teacher-LLM calls (0 = unlimited).
+    PII-redaction always runs before the dataset is registered."""
     body: dict[str, Any] = {
         "name": name,
         "brief": brief,
@@ -556,6 +561,8 @@ def start_acquisition(
         "target_count": target_count,
         "search_provider": search_provider,
         "max_sources": max_sources,
+        "strict_license": strict_license,
+        "max_llm_calls": max_llm_calls,
     }
     if spec is not None:
         body["spec"] = spec
