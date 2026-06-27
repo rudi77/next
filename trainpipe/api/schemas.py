@@ -7,9 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 SFTType = Literal["lora", "full", "qlora", "longlora", "adalora", "ia3"]
 
 # Phase 13 — high-level training mode. SFT is the default
-# instruction-tuning path; the *PO family runs via ``swift rlhf`` with
-# the matching ``--rlhf_type``.
-TrainKind = Literal["sft", "dpo", "kto", "ppo", "grpo"]
+# instruction-tuning path; ``pt`` is (continued) pretraining via
+# ``swift pt`` on raw-text corpora; the *PO family runs via
+# ``swift rlhf`` with the matching ``--rlhf_type``.
+TrainKind = Literal["sft", "pt", "dpo", "kto", "ppo", "grpo"]
 
 # Train kinds that run through ``swift rlhf``.
 RLHF_KINDS = frozenset({"dpo", "kto", "ppo", "grpo"})

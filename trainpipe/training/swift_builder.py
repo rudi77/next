@@ -44,15 +44,19 @@ def build_swift_command(
     if not gpu_ids:
         raise ValueError("gpu_ids must contain at least one GPU index")
 
-    # Phase 13: switch sub-command for *PO trainers. ``swift rlhf`` is
-    # the entry point for DPO/KTO/PPO/GRPO; everything else stays on
-    # ``swift sft``. The flags after this point are identical across
-    # both — they consume the same ExperimentSpec — except we add
-    # ``--rlhf_type`` for the RLHF family.
+    # Phase 13: pick the ms-swift sub-command from the train kind.
+    # ``swift sft`` is instruction tuning, ``swift pt`` is (continued)
+    # pretraining on raw text, and ``swift rlhf`` is the entry point for
+    # the preference/RL family (DPO/KTO/PPO/GRPO). The flags after this
+    # point are identical across all three — they consume the same
+    # ExperimentSpec — except we add ``--rlhf_type`` for the RLHF family.
+    swift = _resolve_swift_binary()
     if spec.train_kind == "sft":
-        argv: list[str] = [_resolve_swift_binary(), "sft"]
+        argv: list[str] = [swift, "sft"]
+    elif spec.train_kind == "pt":
+        argv = [swift, "pt"]
     else:
-        argv = [_resolve_swift_binary(), "rlhf", "--rlhf_type", spec.train_kind]
+        argv = [swift, "rlhf", "--rlhf_type", spec.train_kind]
 
     # ms-swift v4 renamed --model_id_or_path → --model, --sft_type → --tuner_type
     # (and --lora_target_modules → --target_modules below).
